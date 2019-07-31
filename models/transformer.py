@@ -1,9 +1,37 @@
 # Implementation of Transformer from scratch 
-
 import math
 import torch
 import torch.nn as nn
 
+import pdb
+# In decoder self attention, representation of each word need to mask out subsequent words to prevent look-ahead.
+# This function gives a square matrix for each sentence to mask out subsequent words. 
+def get_subsequent_mask(seq_output):
+    # enc: B x N
+    max_len = seq_output.size(1)
+    # N x N
+    subsequent_mask = torch.triu(
+        torch.ones((max_len, max_len), 
+            device=seq_output.device,
+            # turn into ByteTensor
+            dtype=torch.uint8)
+    )
+    # B x N x N
+    subsequent_mask = subsequent_mask.unsqueeze(0).repeat(seq_output.size(0), 1, 1)
+    return subsequent_mask
+
+# representation of each word does not need information from padding
+def get_padding_mask(seq_q, seq_k):
+    # seq_q: B x N_q
+    # seq_k: B x N_k
+    max_len_q = seq_q.size(1)
+    max_len_k = seq_k.size(1)
+    # B x N_k
+    # TODO: change 1 to a global constant
+    padding_mask = seq_k.eq(1)
+    # B x N_q x N_k
+    padding_mask = padding_mask.unsqueeze(1).repeat(1, max_len_q, 1)
+    return padding_mask
 
 class MultiheadAttention(nn.Module):
     # scaled, multi-head attention with scaling on Q, K and V matrices
@@ -16,8 +44,9 @@ class MultiheadAttention(nn.Module):
         self.softmax = nn.Softmax(dim=1)
 
     # Q for queries, K for keys and V for values
-    def forward(self, Q, K, V):
+    def forward(self, Q, K, V, zero_mask=None):
         # Q, K, V: B x N x d_m
+        # zero_mask: B x N_q x N_k
         # a list to hold weighted_V on the fly. BETTER WAY?
         weighted_Vs = []
         for head_idx in range(len(self.proj_K)):
@@ -27,9 +56,16 @@ class MultiheadAttention(nn.Module):
             K_proj = self.proj_K[head_idx](K)
             # B x N x d_v
             V_proj = self.proj_V[head_idx](V)
-            # B x N x N
+            # B x N_q x N_k
             scaled_weight = torch.bmm(Q_proj, K_proj.permute(0, 2, 1)) / math.sqrt(Q_proj.size(2))
             scaled_weight = self.softmax(scaled_weight)
+            # for a word w_i in a sentence, if the jth weight value is masked to 0, then 
+            # the representation of w_i from this MultiheadAttention layer excludes information from word w_j.
+            if zero_mask is not None:
+                # AVOID in-place operation
+                # scaled_weight[zero_mask] = 0 
+                scaled_weight = scaled_weight.masked_fill(zero_mask, 0)
+                pdb.set_trace()
             # B x N x d_v
             # each row of weighted_V is a weighted sum of V_proj where weight is determined by K_proj and Q_proj
             weighted_V = torch.bmm(scaled_weight, V_proj)
@@ -93,7 +129,7 @@ class PositionEncoding(nn.Module):
         return out
 
 class LayerNorm(nn.Module):
-    # layer normalization across features
+    # layer normalization across features: each word embedding gets normalized
     # like batch norm, requires scale(gamma) and bias(beta) terms
     # to make sure we can represent identity transform
     def __init__(self, d_m, eps=1e-6):
@@ -126,15 +162,16 @@ class Embeddings(nn.Module):
 class EncoderLayer(nn.Module):
     def __init__(self, num_heads, d_k, d_v, d_m, d_hidden, dropout=0.0):
         super(EncoderLayer, self).__init__()
-        self.attention = MultiheadAttention(num_heads, d_k, d_v, d_m)
+        self.self_attention = MultiheadAttention(num_heads, d_k, d_v, d_m)
         self.feedforward = FeedforwardNetwork(d_m, d_hidden, dropout=dropout)
         self.norm1 = LayerNorm(d_m)
         self.norm2 = LayerNorm(d_m)
 
-    def forward(self, input_enc):
+    def forward(self, input_enc, self_att_mask):
         # x: B x N x d_m
+        # padding_mask: B x N x N, leave padding tokens out when encoding words
         # B x N x d_m
-        out = self.attention(input_enc, input_enc, input_enc)
+        out = self.self_attention(input_enc, input_enc, input_enc, zero_mask=self_att_mask)
         # residual connection
         out = out + input_enc
         # B x N x d_m
@@ -153,25 +190,25 @@ class EncoderLayer(nn.Module):
 class DecoderLayer(nn.Module):
     def __init__(self, num_heads, d_k, d_v, d_m, d_hidden, dropout=0.0):
         super(DecoderLayer, self).__init__()
-        # TODO: ADD MASKING
-        self.masked_attention = MultiheadAttention(num_heads, d_k, d_v, d_m)
-        self.attention = MultiheadAttention(num_heads, d_k, d_v, d_m)
+        self.self_attention = MultiheadAttention(num_heads, d_k, d_v, d_m)
+        self.enc_dec_attention = MultiheadAttention(num_heads, d_k, d_v, d_m)
         self.feedforward = FeedforwardNetwork(d_m, d_hidden, dropout=dropout)
         self.norm1 = LayerNorm(d_m)
         self.norm2 = LayerNorm(d_m)
         self.norm3 = LayerNorm(d_m)
 
-    def forward(self, input_enc, output_enc):
+    def forward(self, input_enc, output_enc, self_att_mask, enc_dec_att_mask):
         # x: B x N x d_m
+        # need to mask out following words for each word's representation
         # B x N x d_m
-        out = self.masked_attention(Q=output_enc, K=output_enc, V=output_enc)
+        out = self.self_attention(Q=output_enc, K=output_enc, V=output_enc, zero_mask=self_att_mask)
         # residual connection
         out = out + output_enc
         # B x N x d_m
         self_att_enc = self.norm1(out)
 
         # B x N x d_m
-        out = self.attention(Q=output_enc, K=input_enc, V=input_enc)
+        out = self.enc_dec_attention(Q=output_enc, K=input_enc, V=input_enc, zero_mask=enc_dec_att_mask)
         # residual connection
         out = out + self_att_enc
         # B x N x d_m
@@ -207,25 +244,35 @@ class Transformer(nn.Module):
         # where input/output < vocab_size
         assert torch.all(inputs < self.src_embedding.vocab_size)
         assert torch.all(outputs < self.tgt_embedding.vocab_size)
-        # B x N x d_m
+        # B x N_in x d_m
         input_enc = self.src_embedding(inputs)
-        # B x N x d_m
+        # B x N_in x d_m
         input_enc = self.pos_enc(input_enc)
-        # B x N x d_m
-        input_enc = self.encoder_layers(input_enc)
+        # encoder self attention mask, leave out padding token
+        # B x N_in x N_in
+        enc_self_att_mask = get_padding_mask(seq_q=inputs, seq_k=inputs)
+        for encoder_layer in self.encoder_layers:
+            # input_enc gets updated
+            # B x N_in x d_m
+            input_enc = encoder_layer(input_enc, enc_self_att_mask)
+        
+        # B x N_out x d_m
         output_enc = self.tgt_embedding(outputs)
-        # B x N x d_m
+        # B x N_out x d_m
         output_enc = self.pos_enc(output_enc)
-        # B x N x d_m
+        # decoder self attention mask, leave out padding token and subsequent words
+        # B x N_out x N_out
+        dec_self_att_mask = (get_padding_mask(seq_q=outputs, seq_k=outputs) + get_subsequent_mask(outputs)).gt(0)
+        # encoder-decoder attention mask, leave out padding token
+        # B x N_out x N_in
+        enc_dec_att_mask = get_padding_mask(seq_q=outputs, seq_k=inputs)
+        
         for decoder_layer in self.decoder_layers:
             # input_enc stays the same while output_enc gets updated
             # what happens if we match sublayers of encoder to sublayers of decoder?
-            output_enc = decoder_layer(input_enc, output_enc)
-        # B x N x vocab_size
+            # B x N_out x d_m
+            output_enc = decoder_layer(input_enc, output_enc, dec_self_att_mask, enc_dec_att_mask)
+        # B x N_out x vocab_size
         out = self.proj(output_enc)
 
         return out
-
-
-
-
