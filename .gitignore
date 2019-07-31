@@ -1,2 +1,5 @@
 unittests/resnet/checkpoints/
+unittests/transformer/checkpoints/
 *.pyc
+*.png
+*.jpg

@@ -129,10 +129,8 @@ class ResNet(nn.Module):
             out = layer(out)
         
         out = self.avg_pool(out)
-        import pdb; pdb.set_trace()
         # flatten W and H dimensions
         out = out.flatten(start_dim=1)
-        import pdb; pdb.set_trace()
         out = self.projection(out)
         
         return out
