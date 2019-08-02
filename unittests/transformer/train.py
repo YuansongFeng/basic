@@ -21,9 +21,9 @@ import dataset
 # import transformer.Constants as Constants
 
 PAD_LABEL = None
-BOS_LABEL = None
 
 def main():
+    global PAD_LABEL
     # parameters
     data_dir = 'unittests/transformer/data'
     checkpoint_dir = 'unittests/transformer/checkpoints'
@@ -42,11 +42,13 @@ def main():
     )
     en_vocab = dataloaders['en_vocab']
     ch_vocab = dataloaders['ch_vocab']
+    PAD_LABEL = en_vocab.stoi[dataset.PAD_TOKEN]
 
     # load model 
     model = Transformer(
         src_vocab_size=len(en_vocab), 
-        tgt_vocab_size=len(ch_vocab)
+        tgt_vocab_size=len(ch_vocab),
+        pad_label=PAD_LABEL
     ).to(torch.device('cuda'))
 
     if pretrained_checkpoint is not None:
@@ -101,7 +103,7 @@ def train(model, dataloader, criterion, optimizer, en_vocab):
         targets = targets[:, 1:]
         # check that the size matches
         assert torch.equal(torch.tensor(preds.size()), torch.tensor(targets.size())), 'prediction and target size mismatch'
-        loss = calculate_loss(outputs, targets, criterion)
+        loss = calculate_loss(outputs, targets, criterion, label_smoothing=False)
         # calculate and store partial derivatives
         loss.backward()
         # update all parameters based on partial derivatives
@@ -109,7 +111,7 @@ def train(model, dataloader, criterion, optimizer, en_vocab):
         # make sure to ZERO OUT all parameter gradients to prepare a clean slate for the next batch update
         optimizer.zero_grad()
 
-        acc = calculate_acc(preds, targets, pad_label=en_vocab.stoi['<pad>'], sos_label=en_vocab.stoi['<sos>'])
+        acc = calculate_acc(preds, targets)
         acc_meter.add(acc)
         loss_meter.add(loss.item())
 
@@ -132,7 +134,7 @@ def evaluate(model, dataloader, criterion, en_vocab):
         assert torch.equal(torch.tensor(preds.size()), torch.tensor(targets.size())), 'prediction and target size mismatch'
 
         loss = calculate_loss(outputs, targets, criterion)
-        acc = calculate_acc(preds, targets, pad_label=en_vocab.stoi['<pad>'], sos_label=en_vocab.stoi['<sos>'])
+        acc = calculate_acc(preds, targets)
         acc_meter.add(acc)
         loss_meter.add(loss.item())
     return loss_meter.mean, acc_meter.mean
@@ -140,22 +142,35 @@ def evaluate(model, dataloader, criterion, en_vocab):
 def calculate_loss(outputs, targets, criterion, label_smoothing=False):
     # outputs: B x N x vocab_size
     # targets: B x N
+    vocab_size = outputs.size(2)
+    eps = 0.1
     # B*N x vocab_size
-    outputs_expand = outputs.contiguous().view(-1, outputs.size(-1))
-    targets_expand = targets.contiguous().view(-1)
+    outputs = outputs.contiguous().view(-1, vocab_size)
+    # B*N
+    targets = targets.contiguous().view(-1)
+    assert torch.all(targets < vocab_size), "targets contain word index outside of vocabulary"
+    # assumes a true probability of (1-eps) for correct class and eps/(K-1) for false class
     if label_smoothing:
-        # TODO: implement label smoothing
-        return None
+        # B*N x vocab_size
+        one_hot = torch.zeros_like(outputs).scatter(dim=1, index=targets.unsqueeze(1), value=1)
+        true_prob = one_hot * (1-eps) + (1-one_hot) * eps / (vocab_size - 1)
+        # B*N x vocab_size
+        log_pred_prob = nn.functional.log_softmax(outputs, dim=1)
+        # B*N
+        loss = (- true_prob * log_pred_prob).sum(dim=1)
+        non_pad_mask = targets.ne(PAD_LABEL)
+        loss = loss.masked_select(non_pad_mask).sum()
     else:
-        loss = criterion(outputs_expand, targets_expand)
+        loss = criterion(outputs, targets)
     
     return loss
 
-def calculate_acc(predictions, targets, pad_label, sos_label):
+def calculate_acc(predictions, targets):
     # predictions: B x N, tensor
     # targets: B x N, tensor
-    # not counting <sos> and padding
-    mask = targets.ne(pad_label) * targets.ne(sos_label)
+    assert PAD_LABEL is not None
+    # not counting padding 
+    mask = targets.ne(PAD_LABEL)
     total_words = mask.sum().item()
     correct_words = predictions.eq(targets).masked_select(mask).sum().item()
 

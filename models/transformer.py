@@ -24,14 +24,13 @@ def get_subsequent_mask(seq_output):
     return subsequent_mask
 
 # representation of each word does not need information from padding
-def get_padding_mask(seq_q, seq_k):
+def get_padding_mask(seq_q, seq_k, pad_label):
     # seq_q: B x N_q
     # seq_k: B x N_k
     max_len_q = seq_q.size(1)
     max_len_k = seq_k.size(1)
     # B x N_k
-    # TODO: change 1 to a global constant
-    padding_mask = seq_k.eq(1)
+    padding_mask = seq_k.eq(pad_label)
     # B x N_q x N_k
     padding_mask = padding_mask.unsqueeze(1).repeat(1, max_len_q, 1)
     return padding_mask
@@ -229,7 +228,7 @@ class DecoderLayer(nn.Module):
         return out
 
 class Transformer(nn.Module):
-    def __init__(self, src_vocab_size, tgt_vocab_size, num_layers=1, d_k=64, d_v=64, d_m=512, d_hidden=1024, num_heads=8, dropout=0.0):
+    def __init__(self, src_vocab_size, tgt_vocab_size, num_layers=1, d_k=64, d_v=64, d_m=512, d_hidden=1024, num_heads=8, dropout=0.0, pad_label=1):
         super(Transformer, self).__init__()
         # used for input embedding and output embedding
         self.src_embedding = Embeddings(src_vocab_size, d_m)
@@ -242,6 +241,7 @@ class Transformer(nn.Module):
             DecoderLayer(num_heads, d_k, d_v, d_m, d_hidden, dropout) for _ in range(num_layers)
         ])
         self.proj = nn.Linear(d_m, tgt_vocab_size)
+        self.pad_label = pad_label
     
     def forward(self, inputs, outputs):
         # inputs: B x N_in
@@ -257,7 +257,7 @@ class Transformer(nn.Module):
         input_enc = self.pos_enc(input_enc)
         # encoder self attention mask, leave out padding token
         # B x N_in x N_in
-        enc_self_att_mask = get_padding_mask(seq_q=inputs, seq_k=inputs)
+        enc_self_att_mask = get_padding_mask(seq_q=inputs, seq_k=inputs, pad_label=self.pad_label)
         for encoder_layer in self.encoder_layers:
             # B x N_in x d_m
             input_enc = encoder_layer(input_enc, enc_self_att_mask)
@@ -268,10 +268,10 @@ class Transformer(nn.Module):
         output_enc = self.pos_enc(output_enc)
         # decoder self attention mask, leave out padding token and subsequent words
         # B x N_out x N_out
-        dec_self_att_mask = (get_padding_mask(seq_q=outputs, seq_k=outputs) + get_subsequent_mask(outputs)).gt(0)
+        dec_self_att_mask = (get_padding_mask(seq_q=outputs, seq_k=outputs, pad_label=self.pad_label) + get_subsequent_mask(outputs)).gt(0)
         # encoder-decoder attention mask, leave out padding token
         # B x N_out x N_in
-        enc_dec_att_mask = get_padding_mask(seq_q=outputs, seq_k=inputs)
+        enc_dec_att_mask = get_padding_mask(seq_q=outputs, seq_k=inputs, pad_label=self.pad_label)
         
         for decoder_layer in self.decoder_layers:
             # input_enc stays the same while output_enc gets updated

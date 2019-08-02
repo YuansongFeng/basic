@@ -23,11 +23,11 @@ def tokenize_en(text):
 # define torchtext Fields for both chinese and english sources
 # Field characterizes how to turn a specific datatype to Tensor
 # Each field contains its own vocab, but can only be built AFTER a data.Dataset is constructed
-SOS_TOKEN = "<sos>"
-EOS_TOKEN = "<eos>"
+BOS_TOKEN = "<s>"
+EOS_TOKEN = "</s>"
 PAD_TOKEN = "<pad>"
-en_field = data.Field(init_token=SOS_TOKEN, eos_token=EOS_TOKEN, pad_token=PAD_TOKEN, tokenize=tokenize_en, lower=True)
-ch_field = data.Field(init_token=SOS_TOKEN, eos_token=EOS_TOKEN, pad_token=PAD_TOKEN, tokenize=tokenize_ch, lower=True)
+en_field = data.Field(init_token=BOS_TOKEN, eos_token=EOS_TOKEN, pad_token=PAD_TOKEN, tokenize=tokenize_en, lower=True)
+ch_field = data.Field(init_token=BOS_TOKEN, eos_token=EOS_TOKEN, pad_token=PAD_TOKEN, tokenize=tokenize_ch, lower=True)
 
 # define dataset
 class ChineseEnglishDataset(data.Dataset):
