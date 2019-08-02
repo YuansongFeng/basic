@@ -20,6 +20,9 @@ import dataset
 # from transformer.Models import Transformer
 # import transformer.Constants as Constants
 
+PAD_LABEL = None
+BOS_LABEL = None
+
 def main():
     # parameters
     data_dir = 'unittests/transformer/data'
@@ -27,7 +30,9 @@ def main():
     learning_rate = 1e-4
     weight_decay = 0.0
     batch_size = 32
-    num_epochs = 50
+    num_epochs = 80
+    # pretrained_checkpoint = 'unittests/transformer/checkpoints/best_acc.pth.tar'
+    pretrained_checkpoint = None
 
     # load custom dataloader for ch-en translation dataset
     dataloaders = dataset.get_dataloader(
@@ -37,11 +42,15 @@ def main():
     )
     en_vocab = dataloaders['en_vocab']
     ch_vocab = dataloaders['ch_vocab']
+
     # load model 
     model = Transformer(
         src_vocab_size=len(en_vocab), 
         tgt_vocab_size=len(ch_vocab)
     ).to(torch.device('cuda'))
+
+    if pretrained_checkpoint is not None:
+        model.load_state_dict(torch.load(pretrained_checkpoint))
 
     criterion = nn.CrossEntropyLoss().cuda()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.98), weight_decay=weight_decay)
@@ -82,12 +91,14 @@ def train(model, dataloader, criterion, optimizer, en_vocab):
     for batch_idx, batch in enumerate(dataloader):
         # B x N(max_len)
         inputs, targets = batch.src.transpose(0,1), batch.trg.transpose(0,1)
-        
         # both translation source and target are inputted to the model
-        # B x N x vocab_size
+        # B x N-1 x vocab_size
         outputs = model(inputs, targets)
-        # B x N
+        # B x N-1
         preds = outputs.argmax(2)
+        # use the first N-1 words(targets[:, :-1]) to predict last N-1 words(targets[:, 1:])
+        # we use masking inside attention to prevent peak-ahead
+        targets = targets[:, 1:]
         # check that the size matches
         assert torch.equal(torch.tensor(preds.size()), torch.tensor(targets.size())), 'prediction and target size mismatch'
         loss = calculate_loss(outputs, targets, criterion)
@@ -115,12 +126,11 @@ def evaluate(model, dataloader, criterion, en_vocab):
 
     for batch_idx, batch in enumerate(dataloader):
         inputs, targets = batch.src.transpose(0,1), batch.trg.transpose(0,1)
-        # both translation source and target are inputted to the model
-        # B x N x vocab_size
         outputs = model(inputs, targets)
-        # B x N
         preds = outputs.argmax(2)
+        targets = targets[:, 1:]
         assert torch.equal(torch.tensor(preds.size()), torch.tensor(targets.size())), 'prediction and target size mismatch'
+
         loss = calculate_loss(outputs, targets, criterion)
         acc = calculate_acc(preds, targets, pad_label=en_vocab.stoi['<pad>'], sos_label=en_vocab.stoi['<sos>'])
         acc_meter.add(acc)

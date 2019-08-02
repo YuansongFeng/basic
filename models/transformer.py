@@ -2,6 +2,7 @@
 import math
 import torch
 import torch.nn as nn
+import numpy as np
 
 import pdb
 # In decoder self attention, representation of each word need to mask out subsequent words to prevent look-ahead.
@@ -14,7 +15,9 @@ def get_subsequent_mask(seq_output):
         torch.ones((max_len, max_len), 
             device=seq_output.device,
             # turn into ByteTensor
-            dtype=torch.uint8)
+            dtype=torch.uint8),
+        # representation of w_i could depend on itself, as we are predicting for next word w_{i+1}
+        diagonal=1
     )
     # B x N x N
     subsequent_mask = subsequent_mask.unsqueeze(0).repeat(seq_output.size(0), 1, 1)
@@ -41,20 +44,23 @@ class MultiheadAttention(nn.Module):
         self.proj_Q = nn.ModuleList([nn.Linear(d_m, d_k) for _ in range(num_heads)])
         self.proj_V = nn.ModuleList([nn.Linear(d_m, d_v) for _ in range(num_heads)])
         self.proj_O = nn.Linear(d_v*num_heads, d_m)
-        self.softmax = nn.Softmax(dim=1)
+        self.softmax = nn.Softmax(dim=2)
 
-    # Q for queries, K for keys and V for values
+    # attention representation of word w_i is always a function of the
+    # original embedding, which is required by the weight matrix to be
+    # the Query vector. 
     def forward(self, Q, K, V, zero_mask=None):
-        # Q, K, V: B x N x d_m
+        # Q(query): B x N_q x d_m
+        # K(key), V(value): B x N_k x d_m
         # zero_mask: B x N_q x N_k
         # a list to hold weighted_V on the fly. BETTER WAY?
         weighted_Vs = []
         for head_idx in range(len(self.proj_K)):
-            # B x N x d_k
+            # B x N_q x d_k
             Q_proj = self.proj_Q[head_idx](Q)
-            # B x N x d_k
+            # B x N_k x d_k
             K_proj = self.proj_K[head_idx](K)
-            # B x N x d_v
+            # B x N_k x d_v
             V_proj = self.proj_V[head_idx](V)
             # B x N_q x N_k
             scaled_weight = torch.bmm(Q_proj, K_proj.permute(0, 2, 1)) / math.sqrt(Q_proj.size(2))
@@ -65,14 +71,13 @@ class MultiheadAttention(nn.Module):
                 # AVOID in-place operation
                 # scaled_weight[zero_mask] = 0 
                 scaled_weight = scaled_weight.masked_fill(zero_mask, 0)
-                pdb.set_trace()
-            # B x N x d_v
+            # B x N_q x d_v
             # each row of weighted_V is a weighted sum of V_proj where weight is determined by K_proj and Q_proj
             weighted_V = torch.bmm(scaled_weight, V_proj)
             weighted_Vs.append(weighted_V)
-        # B x N x d_v*num_heads
+        # B x N_q x d_v*num_heads
         cat_V = torch.cat(weighted_Vs, dim=2)
-        # B x N x d_m
+        # B x N_q x d_m
         out = self.proj_O(cat_V)
 
         return out
@@ -244,6 +249,8 @@ class Transformer(nn.Module):
         # where input/output < vocab_size
         assert torch.all(inputs < self.src_embedding.vocab_size)
         assert torch.all(outputs < self.tgt_embedding.vocab_size)
+        # use the first N-1 words(given output) to predict last N-1 words(target) 
+        outputs = outputs[:, :-1]
         # B x N_in x d_m
         input_enc = self.src_embedding(inputs)
         # B x N_in x d_m
@@ -252,7 +259,6 @@ class Transformer(nn.Module):
         # B x N_in x N_in
         enc_self_att_mask = get_padding_mask(seq_q=inputs, seq_k=inputs)
         for encoder_layer in self.encoder_layers:
-            # input_enc gets updated
             # B x N_in x d_m
             input_enc = encoder_layer(input_enc, enc_self_att_mask)
         
