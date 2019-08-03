@@ -35,16 +35,19 @@ def cam(raw_imgs, feature_maps, proj_mat, target_ids):
     outputs = []
     for idx in range(B):
         cam = activations[idx].detach().numpy()
-        # normalize
-        cam = cam - np.min(cam)
-        cam = cam / np.max(cam)
-        cam_img = np.uint8(255 * cam)
+        cam_img = _normalize(cam)
         cam_img = cv2.resize(cam_img, (W_i, H_i))
         heatmap = cv2.applyColorMap(cam_img, cv2.COLORMAP_JET)
         # W_i x H_i x 3
         img = raw_imgs[idx].permute(1, 2, 0).numpy()
-        overlay = img * 1
+        img = _normalize(img)
+        overlay = img * 0.5 + heatmap * 0.3
         outputs.append(overlay)
 
     return outputs
 
+def _normalize(img):
+    img = img - np.min(img)
+    img = img / np.max(img)
+    img = np.uint8(255 * img)
+    return img
