@@ -50,6 +50,11 @@ def main():
         tgt_vocab_size=len(ch_vocab),
         pad_label=PAD_LABEL
     ).to(torch.device('cuda'))
+    # # init model 
+    # def weights_init(m):
+    #     if isinstance(m, nn.Linear):
+    #         nn.init.xavier_uniform(m.weight)
+    # model.apply(weights_init)
 
     if pretrained_checkpoint is not None:
         model.load_state_dict(torch.load(pretrained_checkpoint))
@@ -103,7 +108,7 @@ def train(model, dataloader, criterion, optimizer, en_vocab):
         targets = targets[:, 1:]
         # check that the size matches
         assert torch.equal(torch.tensor(preds.size()), torch.tensor(targets.size())), 'prediction and target size mismatch'
-        loss = calculate_loss(outputs, targets, criterion, label_smoothing=False)
+        loss = calculate_loss(outputs, targets, criterion, label_smoothing=True)
         # calculate and store partial derivatives
         loss.backward()
         # update all parameters based on partial derivatives

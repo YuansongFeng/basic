@@ -12,26 +12,39 @@ import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 import torch.optim as optim
 from torchvision.datasets import ImageFolder
-# import torchvision.models as models
 from torch.utils.data import DataLoader
 import torchnet.meter as meter
 from torch.utils.tensorboard import SummaryWriter
+import cv2
 
 from models.resnet import ResNet
+import vis
+import pdb
+
+features_blobs = []
+proj_weight = None
 
 def main():
+    global proj_weight, features_blobs
     # parameters
     data_dir = '/data/feng/places365_mini'
     checkpoint_dir = 'unittests/resnet/checkpoints'
     learning_rate = 1e-4
-    weight_decay = 0.0
+    weight_decay = 5e-4
     batch_size = 64
-    num_epochs = 100
+    num_epochs = 150
+    pretrained_weight = 'unittests/resnet/checkpoints/acc_82.pth.tar'
 
     # load model 
     model = ResNet('resnet18', num_classes=10)
-    # model = models.resnet18(pretrained=False, num_classes=10)
+    if pretrained_weight is not None:
+        model.load_state_dict(torch.load(pretrained_weight))
     model.cuda()
+
+    def hook_feature(module, input, output):
+        features_blobs.append(input[0])
+    model._modules.get('avg_pool').register_forward_hook(hook_feature)
+    proj_weight = model._modules.get('projection').weight.transpose(0, 1)
 
     # define data transform and data loader 
     train_loader = DataLoader(datasets.ImageFolder(
@@ -76,13 +89,15 @@ def main():
     val_loss_hist = []
     best_acc = 0.0
     for epoch in range(num_epochs):
-        loss, acc = train(model, train_loader, criterion, optimizer)
-        train_acc_hist.append(acc)
-        train_loss_hist.append(loss)
+        # loss, acc = train(model, train_loader, criterion, optimizer)
+        # train_acc_hist.append(acc)
+        # train_loss_hist.append(loss)
 
-        loss, acc = validate(model, val_loader, criterion)
+        loss, acc = evaluate(model, val_loader, criterion)
         val_acc_hist.append(acc)
         val_loss_hist.append(loss)
+
+        return 
 
         if acc > best_acc:
             save_path = os.path.join(checkpoint_dir, 'best_acc.pth.tar')
@@ -111,7 +126,7 @@ def train(model, dataloader, criterion, optimizer):
         # check that the size matches
         assert torch.equal(torch.tensor(preds.size()), torch.tensor(targets.size())), 'prediction and target size mismatch'
 
-        loss = criterion(outputs, targets)
+        loss = loss = calculate_loss(outputs, targets, criterion, label_smoothing=True)
         # calculate and store partial derivatives
         loss.backward()
         # update all parameters based on partial derivatives
@@ -128,7 +143,7 @@ def train(model, dataloader, criterion, optimizer):
     return loss_meter.mean, acc_meter.mean
 
     
-def validate(model, dataloader, criterion):
+def evaluate(model, dataloader, criterion):
     acc_meter = meter.AverageValueMeter()
     loss_meter = meter.AverageValueMeter()
 
@@ -142,11 +157,37 @@ def validate(model, dataloader, criterion):
         # check that the size matches
         assert torch.equal(torch.tensor(preds.size()), torch.tensor(targets.size())), 'prediction and target size mismatch'
 
-        loss = criterion(outputs, targets)
+        loss = calculate_loss(outputs, targets, criterion)
         acc = calculate_acc(preds, targets)
         acc_meter.add(acc)
         loss_meter.add(loss.item())
+
+        # output cam
+        cams = vis.cam(inputs.cpu(), features_blobs[-1].cpu(), proj_weight.cpu(), targets.cpu())
+        for idx, cam in enumerate(cams):
+            cv2.imwrite('output/cam_%i.jpg' % idx, cam)
+            print('cam image output to output/cam_%i.jpg' % idx)
+        return None, None
     return loss_meter.mean, acc_meter.mean
+
+def calculate_loss(outputs, targets, criterion, label_smoothing=False):
+    # outputs: B x num_class
+    # targets: B
+    num_class = outputs.size(1)
+    eps = 0.1
+    assert torch.all(targets < num_class), "targets contain class index outside of allowed classes"
+    # assumes a true probability of (1-eps) for correct class and eps/(K-1) for false class
+    if label_smoothing:
+        # B x num_class
+        one_hot = torch.zeros_like(outputs).scatter(dim=1, index=targets.unsqueeze(1), value=1)
+        true_prob = one_hot * (1-eps) + (1-one_hot) * eps / (num_class - 1)
+        # B x num_class
+        log_pred_prob = nn.functional.log_softmax(outputs, dim=1)
+        # B
+        loss = (- true_prob * log_pred_prob).sum()
+    else:
+        loss = criterion(outputs, targets)
+    return loss
 
 # predictions and targets are both torch tensors 
 def calculate_acc(predictions, targets):
@@ -159,14 +200,14 @@ def output_history_graph(train_acc_history, val_acc_history, train_loss_history,
     plt.plot(list(range(epochs)), train_acc_history, label='train')
     plt.plot(list(range(epochs)), val_acc_history, label='val')
     plt.legend(loc='upper left')
-    plt.savefig('acc.png')
+    plt.savefig('unittests/resnet/acc.png')
     plt.clf()
 
     plt.figure(1)
     plt.plot(list(range(epochs)), train_loss_history, label='train')
     plt.plot(list(range(epochs)), val_loss_history, label='val')
     plt.legend(loc='upper left')
-    plt.savefig('loss.png')
+    plt.savefig('unittests/resnet/loss.png')
     plt.clf()
 
 if __name__ == '__main__':

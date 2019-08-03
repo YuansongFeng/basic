@@ -5,6 +5,13 @@ import torch.nn as nn
 import numpy as np
 
 import pdb
+
+def get_non_pad_mask(seq_input, pad_label):
+    # seq_input: B x N
+    # B x N x 1
+    return seq_input.ne(pad_label).float().unsqueeze(-1)
+
+
 # In decoder self attention, representation of each word need to mask out subsequent words to prevent look-ahead.
 # This function gives a square matrix for each sentence to mask out subsequent words. 
 def get_subsequent_mask(seq_output):
@@ -24,7 +31,7 @@ def get_subsequent_mask(seq_output):
     return subsequent_mask
 
 # representation of each word does not need information from padding
-def get_padding_mask(seq_q, seq_k, pad_label):
+def get_att_padding_mask(seq_q, seq_k, pad_label):
     # seq_q: B x N_q
     # seq_k: B x N_k
     max_len_q = seq_q.size(1)
@@ -171,7 +178,7 @@ class EncoderLayer(nn.Module):
         self.norm1 = LayerNorm(d_m)
         self.norm2 = LayerNorm(d_m)
 
-    def forward(self, input_enc, self_att_mask):
+    def forward(self, input_enc, self_att_mask=None, non_pad_mask=None):
         # x: B x N x d_m
         # padding_mask: B x N x N, leave padding tokens out when encoding words
         # B x N x d_m
@@ -180,6 +187,7 @@ class EncoderLayer(nn.Module):
         out = out + input_enc
         # B x N x d_m
         self_att_enc = self.norm1(out)
+        self_att_enc *= non_pad_mask
 
         # B x N x d_m
         out = self.feedforward(out)
@@ -187,6 +195,7 @@ class EncoderLayer(nn.Module):
         out = out + self_att_enc
         # B x N x d_m
         out = self.norm2(out)
+        out *= non_pad_mask
 
         return out
         
@@ -201,7 +210,7 @@ class DecoderLayer(nn.Module):
         self.norm2 = LayerNorm(d_m)
         self.norm3 = LayerNorm(d_m)
 
-    def forward(self, input_enc, output_enc, self_att_mask, enc_dec_att_mask):
+    def forward(self, input_enc, output_enc, self_att_mask=None, enc_dec_att_mask=None, non_pad_mask=None):
         # x: B x N x d_m
         # need to mask out following words for each word's representation
         # B x N x d_m
@@ -210,6 +219,8 @@ class DecoderLayer(nn.Module):
         out = out + output_enc
         # B x N x d_m
         self_att_enc = self.norm1(out)
+        # mask out padding
+        self_att_enc *= non_pad_mask
 
         # B x N x d_m
         out = self.enc_dec_attention(Q=output_enc, K=input_enc, V=input_enc, zero_mask=enc_dec_att_mask)
@@ -217,6 +228,7 @@ class DecoderLayer(nn.Module):
         out = out + self_att_enc
         # B x N x d_m
         cross_att_enc = self.norm2(out)
+        cross_att_enc *= non_pad_mask
 
         # B x N x d_m
         out = self.feedforward(out)
@@ -224,6 +236,7 @@ class DecoderLayer(nn.Module):
         out = out + cross_att_enc
         # B x N x d_m
         out = self.norm3(out)
+        out *= non_pad_mask
 
         return out
 
@@ -255,29 +268,35 @@ class Transformer(nn.Module):
         input_enc = self.src_embedding(inputs)
         # B x N_in x d_m
         input_enc = self.pos_enc(input_enc)
+        # encoder padding mask
+        # B x N_in x 1
+        enc_non_pad_mask = get_non_pad_mask(inputs, self.pad_label)
         # encoder self attention mask, leave out padding token
         # B x N_in x N_in
-        enc_self_att_mask = get_padding_mask(seq_q=inputs, seq_k=inputs, pad_label=self.pad_label)
+        enc_self_att_mask = get_att_padding_mask(seq_q=inputs, seq_k=inputs, pad_label=self.pad_label)
         for encoder_layer in self.encoder_layers:
             # B x N_in x d_m
-            input_enc = encoder_layer(input_enc, enc_self_att_mask)
+            input_enc = encoder_layer(input_enc, self_att_mask=enc_self_att_mask, non_pad_mask=enc_non_pad_mask)
         
         # B x N_out x d_m
         output_enc = self.tgt_embedding(outputs)
         # B x N_out x d_m
         output_enc = self.pos_enc(output_enc)
+        # decoder padding mask
+        # B x N_out x 1
+        dec_non_pad_mask = get_non_pad_mask(outputs, self.pad_label)
         # decoder self attention mask, leave out padding token and subsequent words
         # B x N_out x N_out
-        dec_self_att_mask = (get_padding_mask(seq_q=outputs, seq_k=outputs, pad_label=self.pad_label) + get_subsequent_mask(outputs)).gt(0)
+        dec_self_att_mask = (get_att_padding_mask(seq_q=outputs, seq_k=outputs, pad_label=self.pad_label) + get_subsequent_mask(outputs)).gt(0)
         # encoder-decoder attention mask, leave out padding token
         # B x N_out x N_in
-        enc_dec_att_mask = get_padding_mask(seq_q=outputs, seq_k=inputs, pad_label=self.pad_label)
+        enc_dec_att_mask = get_att_padding_mask(seq_q=outputs, seq_k=inputs, pad_label=self.pad_label)
         
         for decoder_layer in self.decoder_layers:
             # input_enc stays the same while output_enc gets updated
             # what happens if we match sublayers of encoder to sublayers of decoder?
             # B x N_out x d_m
-            output_enc = decoder_layer(input_enc, output_enc, dec_self_att_mask, enc_dec_att_mask)
+            output_enc = decoder_layer(input_enc, output_enc, self_att_mask=get_subsequent_mask(outputs), enc_dec_att_mask=enc_dec_att_mask, non_pad_mask=dec_non_pad_mask)
         # B x N_out x vocab_size
         out = self.proj(output_enc)
 
