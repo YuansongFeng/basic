@@ -20,6 +20,7 @@ import cv2
 from models.resnet import ResNet
 import vis
 import pdb
+import utils
 
 features_blobs = []
 proj_weight = None
@@ -40,11 +41,6 @@ def main():
     if pretrained_weight is not None:
         model.load_state_dict(torch.load(pretrained_weight))
     model.cuda()
-
-    def hook_feature(module, input, output):
-        features_blobs.append(input[0])
-    model._modules.get('avg_pool').register_forward_hook(hook_feature)
-    proj_weight = model._modules.get('projection').weight.transpose(0, 1)
 
     # define data transform and data loader 
     train_loader = DataLoader(datasets.ImageFolder(
@@ -79,8 +75,10 @@ def main():
     criterion = nn.CrossEntropyLoss().cuda()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     
-    # tensorboard writer
-    # writer = SummaryWriter()
+    activated_imgs = vis.top_k_activated_images(model, model.res_layers[-1][-1].conv1, val_loader, 3)
+    pdb.set_trace()
+    utils.output_hierarchy_imgs(activated_imgs)
+    return 
 
     # training loop 
     train_acc_hist = []
@@ -89,15 +87,13 @@ def main():
     val_loss_hist = []
     best_acc = 0.0
     for epoch in range(num_epochs):
-        # loss, acc = train(model, train_loader, criterion, optimizer)
-        # train_acc_hist.append(acc)
-        # train_loss_hist.append(loss)
+        loss, acc = train(model, train_loader, criterion, optimizer)
+        train_acc_hist.append(acc)
+        train_loss_hist.append(loss)
 
         loss, acc = evaluate(model, val_loader, criterion)
         val_acc_hist.append(acc)
         val_loss_hist.append(loss)
-
-        return 
 
         if acc > best_acc:
             save_path = os.path.join(checkpoint_dir, 'best_acc.pth.tar')
@@ -162,12 +158,6 @@ def evaluate(model, dataloader, criterion):
         acc_meter.add(acc)
         loss_meter.add(loss.item())
 
-        # output cam
-        cams = vis.cam(inputs.cpu(), features_blobs[-1].cpu(), proj_weight.cpu(), targets.cpu())
-        for idx, cam in enumerate(cams):
-            cv2.imwrite('output/cam_%i.jpg' % idx, cam)
-            print('cam image output to output/cam_%i.jpg' % idx)
-        return None, None
     return loss_meter.mean, acc_meter.mean
 
 def calculate_loss(outputs, targets, criterion, label_smoothing=False):
