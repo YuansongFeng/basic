@@ -59,6 +59,7 @@ def get_dataloader(train_path, val_path, batch_size=64, device='cuda', shuffle=T
     ch_field.build_vocab(train_dataset, min_freq=2)
 
     # train and val iterators
+    # apply padding to sents in the same batch
     train_iterator, valid_iterator = Iterator.splits(
         (train_dataset, val_dataset),
         batch_size=batch_size,

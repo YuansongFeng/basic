@@ -9,21 +9,23 @@ import cv2
 
 import pdb
 
-# given a dataloader of images, a trained model and
-# the name of the interested conv layer, return, for each filter, 
-# the top K images that activate it the most. 
-# Optionaly, overlay the image with the activation heatmap
-# conv_layer needs to be a layer from the model 
-def top_k_activated_images(model, conv_layer,
+# Inputs
+# model: pre-trained model for image classification on GPU 
+# model_layer: any layer whose output's shape follows B x C x W x H
+# dataloader: dataloader of images
+# Output 
+# for each filter, top k images that activate the filter the most
+# with the activation heatmap overlaid on top
+# Example 
+# activated_imgs = vis.top_k_activated_images(model, model.res_layers[-1][-1].conv1, val_loader, K=3)
+
+def top_k_activated_images(model, model_layer,
     dataloader, K=5):
-    # TODO: assert the layer is in the model
     activations = [None]
     def hook_feature(module, input, output):
         activations[0] = output
-    conv_layer.register_forward_hook(hook_feature)
-    num_filter = conv_layer.out_channels
-    # [num_filter x [K(unordered) x [activation_map, image]]]
-    top_k_stats = [[] for _ in range(num_filter)]
+    model_layer.register_forward_hook(hook_feature)
+    top_k_stats = None
 
     model.eval()
     for batch_idx, (inputs, targets) in enumerate(dataloader):
@@ -31,8 +33,15 @@ def top_k_activated_images(model, conv_layer,
         inputs = inputs.cuda()
         targets = targets.cuda()
         outputs = model(inputs)
+        # make sure that layer is indeed from the model
+        # otherwise, activations[0] won't be assigned
         assert activations[0] is not None
         B, C, W, H = activations[0].size()
+        pdb.set_trace()
+        if top_k_stats is None:
+            # initialize top_k_stats based on the number of output channels
+            # [C x [K(unordered) x [activation_map, image]]]
+            top_k_stats = [[] for _ in range(C)]
         inputs = inputs.permute(0, 2, 3, 1).cpu().numpy()
         acts = activations[0].detach().cpu().numpy()
         for b in range(B):
@@ -62,8 +71,9 @@ def top_k_activated_images(model, conv_layer,
         filter_stats = top_k_stats[f]
         filter_output = []
         for k in range(len(filter_stats)):
+            # filter out inactivated regions using relu
+            act = _normalize(_relu(filter_stats[k][0]))
             img = _normalize(filter_stats[k][1])
-            act = _normalize(filter_stats[k][0])
             act = cv2.resize(act, (img.shape[0], img.shape[1]))
             act = cv2.applyColorMap(act, cv2.COLORMAP_JET)
             overlay = img * 0.5 + act * 0.3
@@ -130,4 +140,8 @@ def _normalize(img):
     img = img - np.min(img)
     img = img / np.max(img)
     img = np.uint8(255 * img)
+    return img
+
+def _relu(img):
+    img[img < 0 ] = 0
     return img

@@ -88,7 +88,8 @@ class ResNet(nn.Module):
     # type: 'resnet18', 'resnet50'
     def __init__(self, resnet_type, num_classes):
         super(ResNet, self).__init__()
-        
+        # if num_classes is -1, output avg pooled features directly without projecting
+        self.output_pooled_feats = (num_classes == -1)
         self.conv0 = nn.Conv2d(3, 64, 7, stride=2, padding=3, bias=False)
         self.max_pool = nn.MaxPool2d(3, stride=2, padding=1)
         # populate all residual layers
@@ -99,7 +100,8 @@ class ResNet(nn.Module):
                 self._make_layer(BasicBlock, 128, [256, 256], 2),
                 self._make_layer(BasicBlock, 256, [512, 512], 2)
             )
-            self.projection = nn.Linear(512, num_classes)
+            if not self.output_pooled_feats:
+                self.projection = nn.Linear(512, num_classes)
         elif resnet_type == 'resnet50':
             self.res_layers = nn.Sequential(
                 self._make_layer(BottleneckBlock, 64, [64, 64, 256], 3, res_stride=1),
@@ -107,7 +109,8 @@ class ResNet(nn.Module):
                 self._make_layer(BottleneckBlock, 512, [256, 256, 1024], 6),
                 self._make_layer(BottleneckBlock, 1024, [512, 512, 2048], 3)
             )
-            self.projection = nn.Linear(2048, num_classes)
+            if not self.output_pooled_feats:
+                self.projection = nn.Linear(2048, num_classes)
         
         self.avg_pool = nn.AvgPool2d(7)
     
@@ -131,6 +134,9 @@ class ResNet(nn.Module):
         out = self.avg_pool(out)
         # flatten W and H dimensions
         out = out.flatten(start_dim=1)
+
+        if self.output_pooled_feats:
+            return out
+            
         out = self.projection(out)
-        
         return out

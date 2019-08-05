@@ -13,4 +13,4 @@ def output_list_imgs(list_imgs, output_dir='output'):
 def output_list_list_imgs(list_list_imgs, output_dir='output'):
     for idx, list_imgs in enumerate(list_list_imgs):
         curr_output_dir = os.path.join(output_dir, str(idx))
-        output_imgs(list_imgs, curr_output_dir)
+        output_list_imgs(list_imgs, curr_output_dir)

@@ -15,6 +15,7 @@ from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader
 import torchnet.meter as meter
 from torch.utils.tensorboard import SummaryWriter
+import torchvision.models as models
 import cv2
 
 from models.resnet import ResNet
@@ -28,19 +29,26 @@ proj_weight = None
 def main():
     global proj_weight, features_blobs
     # parameters
-    data_dir = '/data/feng/places365_mini'
+    data_dir = '/data/feng/places365_standard'
     checkpoint_dir = 'unittests/resnet/checkpoints'
     learning_rate = 1e-4
-    weight_decay = 5e-4
+    weight_decay = 1e-4
     batch_size = 64
     num_epochs = 150
     pretrained_weight = 'unittests/resnet/checkpoints/acc_82.pth.tar'
+    device = torch.device('cuda:0')
 
     # load model 
     model = ResNet('resnet18', num_classes=10)
+    # model = models.resnet18(num_classes=365)
     if pretrained_weight is not None:
         model.load_state_dict(torch.load(pretrained_weight))
-    model.cuda()
+        # cause we are using downloaded resnet for 365 classes, change the projection layer to be 10
+        # checkpoint = torch.load(pretrained_weight, map_location=lambda storage, loc: storage)
+        # state_dict = {str.replace(k,'module.',''): v for k,v in checkpoint['state_dict'].items()}
+        # model.load_state_dict(state_dict)
+        # model.fc = nn.Linear(512, 10)
+    model.to(device)
 
     # define data transform and data loader 
     train_loader = DataLoader(datasets.ImageFolder(
@@ -74,11 +82,11 @@ def main():
 
     criterion = nn.CrossEntropyLoss().cuda()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    
-    activated_imgs = vis.top_k_activated_images(model, model.res_layers[-1][-1].conv1, val_loader, 3)
-    pdb.set_trace()
-    utils.output_hierarchy_imgs(activated_imgs)
-    return 
+
+    # activated_imgs = vis.top_k_activated_images(model, model.layer4[1].conv2, val_loader, K=3)
+    activated_imgs = vis.top_k_activated_images(model, model.res_layers[-1][-1].conv1, val_loader, K=3)
+    utils.output_list_list_imgs(activated_imgs)
+    return
 
     # training loop 
     train_acc_hist = []
@@ -110,12 +118,11 @@ def main():
 def train(model, dataloader, criterion, optimizer):
     acc_meter = meter.AverageValueMeter()
     loss_meter = meter.AverageValueMeter()
-
     model.train()
 
     for batch_idx, (inputs, targets) in enumerate(dataloader):
-        inputs = inputs.cuda()
-        targets = targets.cuda()
+        inputs = inputs.to(torch.device('cuda:0'))
+        targets = targets.to(torch.device('cuda:0'))
         # outputs did NOT go thru softmax. per-class values don't sum to one
         outputs = model(inputs)
         preds = outputs.argmax(dim=1)
@@ -146,8 +153,8 @@ def evaluate(model, dataloader, criterion):
     model.eval()
 
     for batch_idx, (inputs, targets) in enumerate(dataloader):
-        inputs = inputs.cuda()
-        targets = targets.cuda()
+        inputs = inputs.to(torch.device('cuda:0'))
+        targets = targets.to(torch.device('cuda:0'))
         outputs = model(inputs)
         preds = outputs.argmax(dim=1)
         # check that the size matches
