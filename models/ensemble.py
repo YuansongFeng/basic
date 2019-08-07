@@ -24,10 +24,9 @@ class Ensemble(nn.Module):
         # B x C_act(N_in)
         filter_inputs = torch.arange(C_act).unsqueeze(0).repeat(B, 1).to(activations.device)
         # B x C_act(N_in)
-        pad_mask = activations <= 0
+        pad_mask = activations <= 0.5
         # B x C_act(N_in)
         filter_inputs = filter_inputs.masked_fill(pad_mask, self.pad_label)
         # B x N_out x vocab_size
         out = self.transformer(filter_inputs, outputs)
-
         return out

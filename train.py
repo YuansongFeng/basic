@@ -31,11 +31,11 @@ def main():
     anno_val_dir = '/data/feng/coco/annotations/captions_val2014.json'
     checkpoint_dir = 'checkpoints'
     learning_rate = 1e-3
-    weight_decay = 0.0
+    weight_decay = 1e-4
     # effective batch size is batch_size*K(caps_per_img)
-    batch_size = 10
-    num_epochs = 150
-    pretrained_checkpoint = None
+    batch_size = 6
+    num_epochs = 50
+    # pretrained_checkpoint = 'checkpoints/best_acc.pth.tar'
 
     # load vocab to numericalize annotations
     anno_field = dataset.load_annotation_field('anno_field.pl')
@@ -76,10 +76,14 @@ def main():
         filter_vocab_size=512, 
         tgt_vocab_size=len(anno_vocab),
         pad_label=PAD_LABEL
-    ).to(torch.device('cuda'))
+    )
+    # batch_size should be relatively big to take effective advantage of DataParallel
+    # model = nn.DataParallel(model).to(torch.device('cuda'))
+    model.to(torch.device('cuda'))
 
-    if pretrained_checkpoint is not None:
+    if 'pretrained_checkpoint' in locals() and pretrained_checkpoint is not None:
         model.load_state_dict(torch.load(pretrained_checkpoint))
+        print('loaded pre-trained model from %s' % pretrained_checkpoint)
 
     criterion = nn.CrossEntropyLoss().cuda()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.98), weight_decay=weight_decay)
@@ -139,6 +143,11 @@ def train(model, dataloader, criterion, optimizer, anno_field):
         # use the first N-1 words(targets[:, :-1]) to predict last N-1 words(targets[:, 1:])
         # we use masking inside attention to prevent peak-ahead
         targets = targets[:, 1:]
+        # print('preds')
+        # print_batch_itos(anno_field.vocab, preds)
+        # print('targets')
+        # print_batch_itos(anno_field.vocab, targets)
+        # pdb.set_trace()
         # check that the size matches
         assert torch.equal(torch.tensor(preds.size()), torch.tensor(targets.size())), 'prediction and target size mismatch'
         loss = calculate_loss(outputs, targets, criterion, label_smoothing=True)
@@ -157,7 +166,7 @@ def train(model, dataloader, criterion, optimizer, anno_field):
         if batch_idx % 100 == 0:
             epoch_time = len(dataloader) * time_meter.mean
             print('training: batch: %i loss: %f acc: %f epoch time: %fs' % (batch_idx, loss_meter.mean, acc_meter.mean, epoch_time))
-        if batch_idx > 2000:
+        if batch_idx > 1000:
             break
     return loss_meter.mean, acc_meter.mean
 
@@ -190,7 +199,7 @@ def evaluate(model, dataloader, criterion, anno_field):
 
         if batch_idx % 100 == 0:
             print('validation: batch: %i loss: %f acc: %f' % (batch_idx, loss_meter.mean, acc_meter.mean))
-        if batch_idx > 200:
+        if batch_idx > 400:
             break
     return loss_meter.mean, acc_meter.mean
 
@@ -211,6 +220,11 @@ def anno_transform(anno_field, annotations):
     # B*K x N captions from same image are grouped
     annotations = annotations.view(K, B, -1).transpose(0, 1).contiguous().view(B*K, -1)
     return annotations
+
+def print_batch_itos(vocab, sents_in_int, K=5):
+    for k in range(K):
+        print(' '.join([vocab.itos[word] for word in sents_in_int[k]]))
+        print()
 
 def calculate_loss(outputs, targets, criterion, label_smoothing=False):
     # outputs: B x N x vocab_size

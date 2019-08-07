@@ -134,7 +134,7 @@ class ResNet(nn.Module):
         out = self.avg_pool(out)
         # flatten W and H dimensions
         out = out.flatten(start_dim=1)
-
+    
         if self.output_pooled_feats:
             return out
             

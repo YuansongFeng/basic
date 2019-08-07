@@ -44,13 +44,14 @@ def get_att_padding_mask(seq_q, seq_k, pad_label):
 
 class MultiheadAttention(nn.Module):
     # scaled, multi-head attention with scaling on Q, K and V matrices
-    def __init__(self, num_heads, d_k, d_v, d_m):
+    def __init__(self, num_heads, d_k, d_v, d_m, dropout=0.1):
         super(MultiheadAttention, self).__init__()
         self.proj_K = nn.ModuleList([nn.Linear(d_m, d_k) for _ in range(num_heads)])
         self.proj_Q = nn.ModuleList([nn.Linear(d_m, d_k) for _ in range(num_heads)])
         self.proj_V = nn.ModuleList([nn.Linear(d_m, d_v) for _ in range(num_heads)])
         self.proj_O = nn.Linear(d_v*num_heads, d_m)
         self.softmax = nn.Softmax(dim=2)
+        self.dropout = nn.Dropout(dropout)
 
     # attention representation of word w_i is always a function of the
     # original embedding, which is required by the weight matrix to be
@@ -77,6 +78,7 @@ class MultiheadAttention(nn.Module):
                 # AVOID in-place operation
                 # scaled_weight[zero_mask] = 0 
                 scaled_weight = scaled_weight.masked_fill(zero_mask, 0)
+            scaled_weight = self.dropout(scaled_weight)
             # B x N_q x d_v
             # each row of weighted_V is a weighted sum of V_proj where weight is determined by K_proj and Q_proj
             weighted_V = torch.bmm(scaled_weight, V_proj)
@@ -92,7 +94,7 @@ class MultiheadAttention(nn.Module):
 class FeedforwardNetwork(nn.Module):
     # Positionwise feedforward neural network 
     # performs more projection in addition to the output projection W_O in MultiheadAttention
-    def __init__(self, d_m, d_hidden, dropout=0.0):
+    def __init__(self, d_m, d_hidden, dropout=0.1):
         super(FeedforwardNetwork, self).__init__()
         self.fc1 = nn.Linear(d_m, d_hidden)
         self.fc2 = nn.Linear(d_hidden, d_m)
@@ -112,7 +114,7 @@ class FeedforwardNetwork(nn.Module):
 
 class PositionEncoding(nn.Module):
     # encode position information of input words by overlaying sinusoidal signal
-    def __init__(self, d_m, max_len=1000, dropout=0.0):
+    def __init__(self, d_m, max_len=1000, dropout=0.1):
         super(PositionEncoding, self).__init__()
         # all even numbers from 0 to 1-d_m
         feature_idxs = torch.arange(0, d_m, 2).double()
@@ -171,7 +173,7 @@ class Embeddings(nn.Module):
         return self.embedding(x) * math.sqrt(self.d_m)
 
 class EncoderLayer(nn.Module):
-    def __init__(self, num_heads, d_k, d_v, d_m, d_hidden, dropout=0.0):
+    def __init__(self, num_heads, d_k, d_v, d_m, d_hidden, dropout=0.1):
         super(EncoderLayer, self).__init__()
         self.self_attention = MultiheadAttention(num_heads, d_k, d_v, d_m)
         self.feedforward = FeedforwardNetwork(d_m, d_hidden, dropout=dropout)
@@ -201,7 +203,7 @@ class EncoderLayer(nn.Module):
         
 
 class DecoderLayer(nn.Module):
-    def __init__(self, num_heads, d_k, d_v, d_m, d_hidden, dropout=0.0):
+    def __init__(self, num_heads, d_k, d_v, d_m, d_hidden, dropout=0.1):
         super(DecoderLayer, self).__init__()
         self.self_attention = MultiheadAttention(num_heads, d_k, d_v, d_m)
         self.enc_dec_attention = MultiheadAttention(num_heads, d_k, d_v, d_m)
@@ -241,7 +243,7 @@ class DecoderLayer(nn.Module):
         return out
 
 class Transformer(nn.Module):
-    def __init__(self, src_vocab_size, tgt_vocab_size, num_layers=1, d_k=64, d_v=64, d_m=512, d_hidden=1024, num_heads=8, dropout=0.0, pad_label=1):
+    def __init__(self, src_vocab_size, tgt_vocab_size, num_layers=1, d_k=64, d_v=64, d_m=512, d_hidden=1024, num_heads=8, dropout=0.1, pad_label=1):
         super(Transformer, self).__init__()
         # used for input embedding and output embedding
         self.src_embedding = Embeddings(src_vocab_size, d_m, padding_idx=pad_label)
@@ -253,7 +255,9 @@ class Transformer(nn.Module):
         self.decoder_layers = nn.Sequential(*[
             DecoderLayer(num_heads, d_k, d_v, d_m, d_hidden, dropout) for _ in range(num_layers)
         ])
+        # reuse the target embedding matrix as a form of regularization
         self.proj = nn.Linear(d_m, tgt_vocab_size)
+        self.proj.weight = self.tgt_embedding.embedding.weight
         self.pad_label = pad_label
     
     def forward(self, inputs, outputs):
@@ -277,7 +281,7 @@ class Transformer(nn.Module):
         for encoder_layer in self.encoder_layers:
             # B x N_in x d_m
             input_enc = encoder_layer(input_enc, self_att_mask=enc_self_att_mask, non_pad_mask=enc_non_pad_mask)
-        
+
         # B x N_out x d_m
         output_enc = self.tgt_embedding(outputs)
         # B x N_out x d_m
