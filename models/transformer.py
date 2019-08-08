@@ -248,11 +248,17 @@ class DecoderLayer(nn.Module):
         return out
 
 class Transformer(nn.Module):
-    def __init__(self, src_vocab_size, tgt_vocab_size, num_layers=1, d_k=64, d_v=64, d_m=512, d_hidden=1024, num_heads=8, dropout=0.1, pad_label=1):
+    def __init__(self, src_vocab, tgt_vocab, num_layers=1, d_k=64, d_v=64, d_m=512, d_hidden=1024, num_heads=8, dropout=0.1, pad_label=1):
         super(Transformer, self).__init__()
         # used for input embedding and output embedding
-        self.src_embedding = Embeddings(src_vocab_size, d_m, padding_idx=pad_label)
-        self.tgt_embedding = Embeddings(tgt_vocab_size, d_m, padding_idx=pad_label)
+        self.src_embedding = Embeddings(len(src_vocab), d_m, padding_idx=pad_label)
+        self.tgt_embedding = Embeddings(len(tgt_vocab), d_m, padding_idx=pad_label)
+        if src_vocab.vectors is not None:
+            assert d_m == src_vocab.vectors.size(1)
+            self.src_embedding.embedding.weight.data.copy_(src_vocab.vectors)
+        if tgt_vocab.vectors is not None:
+            assert d_m == tgt_vocab.vectors.size(1)
+            self.tgt_embedding.embedding.weight.data.copy_(tgt_vocab.vectors)
         self.pos_enc = PositionEncoding(d_m)
         self.encoder_layers = nn.Sequential(*[
             EncoderLayer(num_heads, d_k, d_v, d_m, d_hidden, dropout) for _ in range(num_layers)
@@ -261,7 +267,7 @@ class Transformer(nn.Module):
             DecoderLayer(num_heads, d_k, d_v, d_m, d_hidden, dropout) for _ in range(num_layers)
         ])
         # reuse the target embedding matrix as a form of regularization
-        self.proj = nn.Linear(d_m, tgt_vocab_size)
+        self.proj = nn.Linear(d_m, len(tgt_vocab))
         self.proj.weight = self.tgt_embedding.embedding.weight
         self.pad_label = pad_label
     

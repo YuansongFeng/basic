@@ -6,3 +6,4 @@ checkpoints/
 *.jpg
 *.pl
 *.txt
+.glove_cache/

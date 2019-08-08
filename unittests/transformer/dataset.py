@@ -55,7 +55,7 @@ def get_dataloader(train_path, val_path, batch_size=64, device='cuda', shuffle=T
     val_dataset = ChineseEnglishDataset(val_path, src_field=en_field, trg_field=ch_field)
 
     # build vocab for ch/en field based on the training dataset
-    en_field.build_vocab(train_dataset, min_freq=2)
+    en_field.build_vocab(train_dataset, min_freq=2, vectors='glove.6B.100d', vectors_cache='.glove_cache')
     ch_field.build_vocab(train_dataset, min_freq=2)
 
     # train and val iterators

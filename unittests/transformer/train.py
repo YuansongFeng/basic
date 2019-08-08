@@ -33,9 +33,9 @@ def main():
     # it helps to gradually decrease learning rate
     learning_rate = 1e-3
     weight_decay = 1e-4
-    batch_size = 128
+    batch_size = 196
     num_epochs = 500
-    # pretrained_checkpoint = 'unittests/transformer/checkpoints/best_acc.pth.tar'
+    pretrained_checkpoint = 'unittests/transformer/checkpoints/best_acc.pth.tar'
 
     # load custom dataloader for ch-en translation dataset
     dataloaders = dataset.get_dataloader(
@@ -54,12 +54,12 @@ def main():
     # **Depth** is the key to the improved validation accuracy, even though deeper 
     # network introduces several times more parameters: 1 layer -> 4 layers ==> 50% ->  90%
     model = Transformer(
-        src_vocab_size=len(en_vocab),
-        tgt_vocab_size=len(ch_vocab),
+        src_vocab=en_vocab,
+        tgt_vocab=ch_vocab,
         num_layers=4,
-        d_k=32,
-        d_v=32,
-        d_m=128,
+        d_k=25,
+        d_v=25,
+        d_m=100,
         d_hidden=256,
         num_heads=4,
         dropout=0.1,
@@ -191,7 +191,7 @@ def evaluate(model, dataloader, criterion, en_vocab, ch_vocab):
         preds = outputs.argmax(2)
         targets = targets[:, 1:]
         
-        # print_batch_itos(en_vocab, ch_vocab, inputs, targets, preds, K=10)
+        # utils.print_batch_itos(en_vocab, ch_vocab, inputs, targets, preds, K=10)
 
         assert torch.equal(torch.tensor(preds.size()), torch.tensor(targets.size())), 'prediction and target size mismatch'
 
@@ -200,18 +200,6 @@ def evaluate(model, dataloader, criterion, en_vocab, ch_vocab):
         acc_meter.add(acc)
         loss_meter.add(loss.item())
     return loss_meter.mean, acc_meter.mean
-
-def print_batch_itos(input_vocab, output_vocab, inputs, targets, outputs, K=2):
-    words = [inputs, targets, outputs]
-    words_label = ['inputs', 'targets', 'outputs']
-    if K > inputs.size(0):
-        K = inputs.size(0)
-    for k in range(K):
-        for w in range(len(words)):
-            print(words_label[w])    
-            vocab = input_vocab if  words_label[w] == 'inputs' else output_vocab
-            print(' '.join([vocab.itos[word] for word in words[w][k]]))
-        print()
 
 def calculate_loss(outputs, targets, criterion, label_smoothing=False):
     # outputs: B x N x vocab_size

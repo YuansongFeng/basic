@@ -18,3 +18,15 @@ def output_list_list_imgs(list_list_imgs, output_dir='output'):
 # Count the number of parameters in a model.
 def count_parameters(model):
     return sum([p.numel() for p in model.parameters()])
+
+def print_batch_itos(input_vocab, output_vocab, inputs, targets, outputs, K=2):
+    words = [inputs, targets, outputs]
+    words_label = ['inputs', 'targets', 'outputs']
+    if K > inputs.size(0):
+        K = inputs.size(0)
+    for k in range(K):
+        for w in range(len(words)):
+            print(words_label[w])    
+            vocab = input_vocab if  words_label[w] == 'inputs' else output_vocab
+            print(' '.join([vocab.itos[word] for word in words[w][k]]))
+        print()
