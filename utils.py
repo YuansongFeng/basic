@@ -14,3 +14,7 @@ def output_list_list_imgs(list_list_imgs, output_dir='output'):
     for idx, list_imgs in enumerate(list_list_imgs):
         curr_output_dir = os.path.join(output_dir, str(idx))
         output_list_imgs(list_imgs, curr_output_dir)
+
+# Count the number of parameters in a model.
+def count_parameters(model):
+    return sum([p.numel() for p in model.parameters()])

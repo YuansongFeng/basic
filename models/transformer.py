@@ -54,7 +54,7 @@ class MultiheadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     # attention representation of word w_i is always a function of the
-    # original embedding, which is required by the weight matrix to be
+    # word w_i itself, which is required by the weight matrix to be
     # the Query vector. 
     def forward(self, Q, K, V, zero_mask=None):
         # Q(query): B x N_q x d_m
@@ -71,13 +71,18 @@ class MultiheadAttention(nn.Module):
             V_proj = self.proj_V[head_idx](V)
             # B x N_q x N_k
             scaled_weight = torch.bmm(Q_proj, K_proj.permute(0, 2, 1)) / math.sqrt(Q_proj.size(2))
-            scaled_weight = self.softmax(scaled_weight)
+            # VERY IMPORTANT to first mask then softmax, which ensures two things:
+            # 1. representation of w_i does not depends on any word w_{i+k} after w_i,
+            # as otherwise softmax representation will include future words' information
+            # 2. total weights of all Value vectors sum to 1
+
             # for a word w_i in a sentence, if the jth weight value is masked to 0, then 
             # the representation of w_i from this MultiheadAttention layer excludes information from word w_j.
             if zero_mask is not None:
                 # AVOID in-place operation
-                # scaled_weight[zero_mask] = 0 
-                scaled_weight = scaled_weight.masked_fill(zero_mask, 0)
+                # scaled_weight[zero_mask] = -np.inf
+                scaled_weight = scaled_weight.masked_fill(zero_mask, -np.inf)
+            scaled_weight = self.softmax(scaled_weight)
             scaled_weight = self.dropout(scaled_weight)
             # B x N_q x d_v
             # each row of weighted_V is a weighted sum of V_proj where weight is determined by K_proj and Q_proj
@@ -225,7 +230,7 @@ class DecoderLayer(nn.Module):
         self_att_enc *= non_pad_mask
 
         # B x N x d_m
-        out = self.enc_dec_attention(Q=output_enc, K=input_enc, V=input_enc, zero_mask=enc_dec_att_mask)
+        out = self.enc_dec_attention(Q=self_att_enc, K=input_enc, V=input_enc, zero_mask=enc_dec_att_mask)
         # residual connection
         out = out + self_att_enc
         # B x N x d_m
@@ -233,7 +238,7 @@ class DecoderLayer(nn.Module):
         cross_att_enc *= non_pad_mask
 
         # B x N x d_m
-        out = self.feedforward(out)
+        out = self.feedforward(cross_att_enc)
         # residual connection
         out = out + cross_att_enc
         # B x N x d_m

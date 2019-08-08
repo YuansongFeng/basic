@@ -15,11 +15,12 @@ import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
 import torchnet.meter as meter
 
-# from models.transformer import Transformer
+from models.transformer import Transformer
 import dataset
+import utils
 # import Transformer from delldu's repo
-from transformer.Models import Transformer
-import transformer.Constants as Constants
+# from transformer.Models import Transformer
+# import transformer.Constants as Constants
 import pdb
 
 PAD_LABEL = None
@@ -32,7 +33,7 @@ def main():
     # it helps to gradually decrease learning rate
     learning_rate = 1e-3
     weight_decay = 1e-4
-    batch_size = 196
+    batch_size = 128
     num_epochs = 500
     # pretrained_checkpoint = 'unittests/transformer/checkpoints/best_acc.pth.tar'
 
@@ -52,34 +53,34 @@ def main():
     # However, we still need some depth(num_layers) greater than 1. 
     # **Depth** is the key to the improved validation accuracy, even though deeper 
     # network introduces several times more parameters: 1 layer -> 4 layers ==> 50% ->  90%
-    # model = Transformer(
-    #     src_vocab_size=len(en_vocab),
-    #     tgt_vocab_size=len(ch_vocab),
-    #     num_layers=4,
-    #     d_k=32,
-    #     d_v=32,
-    #     d_m=128,
-    #     d_hidden=256,
-    #     num_heads=4,
-    #     dropout=0.1,
-    #     pad_label=PAD_LABEL
-    # )
     model = Transformer(
-        len(en_vocab),
-        len(ch_vocab),
-        100,
-        tgt_emb_prj_weight_sharing=True,
-        emb_src_tgt_weight_sharing=False,
+        src_vocab_size=len(en_vocab),
+        tgt_vocab_size=len(ch_vocab),
+        num_layers=4,
         d_k=32,
         d_v=32,
-        d_model=128,
-        d_word_vec=128,
-        d_inner=256,
-        # use shallow net cause we have small training data
-        n_layers=4,
-        n_head=4,
-        # dropout helps
-        dropout=0.1)
+        d_m=128,
+        d_hidden=256,
+        num_heads=4,
+        dropout=0.1,
+        pad_label=PAD_LABEL
+    ) 
+    # model = Transformer(
+    #     len(en_vocab),
+    #     len(ch_vocab),
+    #     100,
+    #     tgt_emb_prj_weight_sharing=True,
+    #     emb_src_tgt_weight_sharing=False,
+    #     d_k=32,
+    #     d_v=32,
+    #     d_model=128,
+    #     d_word_vec=128,
+    #     d_inner=256,
+    #     # use shallow net cause we have small training data
+    #     n_layers=1,
+    #     n_head=4,
+    #     # dropout helps
+    #     dropout=0.2) 
     # DataParallel helps the most if batch_size is big, in order to justify the communication cost
     model = nn.DataParallel(model).to(torch.device('cuda'))
 
@@ -142,7 +143,7 @@ def train(model, dataloader, criterion, optimizer):
 
         # both translation source and target are inputted to the model
         # B x N-1 x vocab_size
-        outputs = model(inputs, input_pos, targets, target_pos)
+        outputs = model(inputs, targets)
         # B x N-1
         preds = outputs.argmax(2)
         # use the first N-1 words(targets[:, :-1]) to predict last N-1 words(targets[:, 1:])
@@ -186,7 +187,7 @@ def evaluate(model, dataloader, criterion, en_vocab, ch_vocab):
         pad_mask = targets.eq(PAD_LABEL)
         target_pos = target_pos.masked_fill(pad_mask, 0)
 
-        outputs = model(inputs, input_pos, targets, target_pos)
+        outputs = model(inputs, targets)
         preds = outputs.argmax(2)
         targets = targets[:, 1:]
         
