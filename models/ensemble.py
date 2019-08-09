@@ -39,7 +39,6 @@ class Ensemble(nn.Module):
         pad_mask = activations <= 0.5
         # B x C_act(N_in)
         filter_inputs = filter_inputs.masked_fill(pad_mask, self.pad_label)
-        # pdb.set_trace()
         # B x N_out x vocab_size
         out = self.transformer(filter_inputs, outputs)
         return out
