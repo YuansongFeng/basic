@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.optim.lr_scheduler as lr_scheduler
 import torchnet.meter as meter
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
@@ -18,6 +19,7 @@ import time
 
 from models.ensemble import Ensemble
 import dataset
+import utils
 import pdb
 
 PAD_LABEL = None
@@ -33,9 +35,10 @@ def main():
     learning_rate = 1e-3
     weight_decay = 1e-4
     # effective batch size is batch_size*K(caps_per_img)
-    batch_size = 6
-    num_epochs = 50
-    # pretrained_checkpoint = 'checkpoints/best_acc.pth.tar'
+    batch_size = 2
+    num_epochs = 500
+    device = torch.device('cuda:1')
+    pretrained_checkpoint = 'checkpoints/best_acc.pth.tar'
 
     # load vocab to numericalize annotations
     anno_field = dataset.load_annotation_field('anno_field.pl')
@@ -75,11 +78,12 @@ def main():
     model = Ensemble(
         filter_vocab_size=512, 
         tgt_vocab_size=len(anno_vocab),
+        tgt_vocab_vectors=anno_vocab.vectors,
         pad_label=PAD_LABEL
     )
     # batch_size should be relatively big to take effective advantage of DataParallel
     # model = nn.DataParallel(model).to(torch.device('cuda'))
-    model.to(torch.device('cuda'))
+    model.to(device)
 
     if 'pretrained_checkpoint' in locals() and pretrained_checkpoint is not None:
         model.load_state_dict(torch.load(pretrained_checkpoint))
@@ -87,7 +91,8 @@ def main():
 
     criterion = nn.CrossEntropyLoss().cuda()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.98), weight_decay=weight_decay)
-    
+    scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, verbose=True, patience=15)
+
     # training loop 
     train_acc_hist = []
     train_loss_hist = []
@@ -95,13 +100,16 @@ def main():
     val_loss_hist = []
     best_acc = 0.0
     for epoch in range(num_epochs):
-        loss, acc = train(model, train_loader, criterion, optimizer, anno_field)
+        loss, acc = train(model, train_loader, criterion, optimizer, anno_field, device)
         train_acc_hist.append(acc)
         train_loss_hist.append(loss)
 
-        loss, acc = evaluate(model, val_loader, criterion, anno_field)
+        loss, acc = evaluate(model, val_loader, criterion, anno_field, device)
         val_acc_hist.append(acc)
         val_loss_hist.append(loss)
+
+        # reduce learning rate on plateau of validation loss
+        scheduler.step(loss)
 
         if acc > best_acc:
             save_path = os.path.join(checkpoint_dir, 'best_acc.pth.tar')
@@ -112,10 +120,10 @@ def main():
         print('****** epoch: %i val loss: %f val acc: %f best_acc: %f ******' % (epoch, loss, acc, best_acc))
 
         # upload loss and acc curves to visdom
-        output_history_graph(train_acc_hist, val_acc_hist, train_loss_hist, val_loss_hist)
+        utils.output_history_graph(train_acc_hist, val_acc_hist, train_loss_hist, val_loss_hist)
 
 
-def train(model, dataloader, criterion, optimizer, anno_field):
+def train(model, dataloader, criterion, optimizer, anno_field, device):
     acc_meter = meter.AverageValueMeter()
     loss_meter = meter.AverageValueMeter()
     time_meter = meter.AverageValueMeter()
@@ -133,8 +141,8 @@ def train(model, dataloader, criterion, optimizer, anno_field):
         # B*K x C x W x H
         inputs = imgs.unsqueeze(0).repeat(K, 1, 1, 1, 1).view(B*K, C, W, H)
         # move to cuda
-        inputs = inputs.to(torch.device('cuda'))
-        targets = targets.to(torch.device('cuda'))
+        inputs = inputs.to(device)
+        targets = targets.to(device)
         # both translation source and target are inputted to the model
         # B x N-1 x vocab_size
         outputs = model(inputs, targets)
@@ -143,11 +151,6 @@ def train(model, dataloader, criterion, optimizer, anno_field):
         # use the first N-1 words(targets[:, :-1]) to predict last N-1 words(targets[:, 1:])
         # we use masking inside attention to prevent peak-ahead
         targets = targets[:, 1:]
-        # print('preds')
-        # print_batch_itos(anno_field.vocab, preds)
-        # print('targets')
-        # print_batch_itos(anno_field.vocab, targets)
-        # pdb.set_trace()
         # check that the size matches
         assert torch.equal(torch.tensor(preds.size()), torch.tensor(targets.size())), 'prediction and target size mismatch'
         loss = calculate_loss(outputs, targets, criterion, label_smoothing=True)
@@ -171,7 +174,7 @@ def train(model, dataloader, criterion, optimizer, anno_field):
     return loss_meter.mean, acc_meter.mean
 
     
-def evaluate(model, dataloader, criterion, anno_field):
+def evaluate(model, dataloader, criterion, anno_field, device):
     acc_meter = meter.AverageValueMeter()
     loss_meter = meter.AverageValueMeter()
 
@@ -185,12 +188,14 @@ def evaluate(model, dataloader, criterion, anno_field):
         targets = anno_transform(anno_field, annotations)
         inputs = imgs.unsqueeze(0).repeat(K, 1, 1, 1, 1).view(B*K, C, W, H)
         # move to cuda
-        inputs = inputs.to(torch.device('cuda'))
-        targets = targets.to(torch.device('cuda'))
+        inputs = inputs.to(device)
+        targets = targets.to(device)
         outputs = model(inputs, targets)
         preds = outputs.argmax(2)
         targets = targets[:, 1:]
         assert torch.equal(torch.tensor(preds.size()), torch.tensor(targets.size())), 'prediction and target size mismatch'
+
+        # utils.print_batch_itos(None, anno_field.vocab, None, targets, preds)
 
         loss = calculate_loss(outputs, targets, criterion, label_smoothing=True)
         acc = calculate_acc(preds, targets)
@@ -220,11 +225,6 @@ def anno_transform(anno_field, annotations):
     # B*K x N captions from same image are grouped
     annotations = annotations.view(K, B, -1).transpose(0, 1).contiguous().view(B*K, -1)
     return annotations
-
-def print_batch_itos(vocab, sents_in_int, K=5):
-    for k in range(K):
-        print(' '.join([vocab.itos[word] for word in sents_in_int[k]]))
-        print()
 
 def calculate_loss(outputs, targets, criterion, label_smoothing=False):
     # outputs: B x N x vocab_size
@@ -262,23 +262,6 @@ def calculate_acc(predictions, targets):
     correct_words = predictions.eq(targets).masked_select(mask).sum().item()
 
     return correct_words / total_words
-
-def output_history_graph(train_acc_history, val_acc_history, train_loss_history, val_loss_history):
-    epochs = len(train_acc_history)
-    # output training and validation accuracies
-    plt.figure(0)
-    plt.plot(list(range(epochs)), train_acc_history, label='train')
-    plt.plot(list(range(epochs)), val_acc_history, label='val')
-    plt.legend(loc='upper left')
-    plt.savefig('acc.png')
-    plt.clf()
-
-    plt.figure(1)
-    plt.plot(list(range(epochs)), train_loss_history, label='train')
-    plt.plot(list(range(epochs)), val_loss_history, label='val')
-    plt.legend(loc='upper left')
-    plt.savefig('loss.png')
-    plt.clf()
 
 if __name__ == '__main__':
     main()

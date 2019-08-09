@@ -50,12 +50,10 @@ def main():
 
     # load model
     # As we don't have much training data, use small feature dimension(dk, dv, dm)
-    # However, we still need some depth(num_layers) greater than 1. 
-    # **Depth** is the key to the improved validation accuracy, even though deeper 
-    # network introduces several times more parameters: 1 layer -> 4 layers ==> 50% ->  90%
     model = Transformer(
-        src_vocab=en_vocab,
-        tgt_vocab=ch_vocab,
+        src_vocab_size=len(en_vocab),
+        tgt_vocab_size=len(ch_vocab),
+        src_vocab_vectors=en_vocab.vectors,
         num_layers=4,
         d_k=25,
         d_v=25,
@@ -111,14 +109,14 @@ def main():
 
         if acc > best_acc:
             save_path = os.path.join(checkpoint_dir, 'best_acc.pth.tar')
-            torch.save(model.state_dict(), save_path)
+            # torch.save(model.state_dict(), save_path)
             best_acc = acc
             print('model with accuracy %f saved to path %s' % (acc, save_path))
         
         print('****** epoch: %i val loss: %f val acc: %f best_acc: %f ******' % (epoch, loss, acc, best_acc))
 
         # upload loss and acc curves to visdom
-        output_history_graph(train_acc_hist, val_acc_hist, train_loss_hist, val_loss_hist)
+        utils.output_history_graph(train_acc_hist, val_acc_hist, train_loss_hist, val_loss_hist)
 
 
 def train(model, dataloader, criterion, optimizer):
@@ -237,23 +235,6 @@ def calculate_acc(predictions, targets):
     correct_words = predictions.eq(targets).masked_select(mask).sum().item()
 
     return correct_words / total_words
-
-def output_history_graph(train_acc_history, val_acc_history, train_loss_history, val_loss_history):
-    epochs = len(train_acc_history)
-    # output training and validation accuracies
-    plt.figure(0)
-    plt.plot(list(range(epochs)), train_acc_history, label='train')
-    plt.plot(list(range(epochs)), val_acc_history, label='val')
-    plt.legend(loc='upper left')
-    plt.savefig('acc.png')
-    plt.clf()
-
-    plt.figure(1)
-    plt.plot(list(range(epochs)), train_loss_history, label='train')
-    plt.plot(list(range(epochs)), val_loss_history, label='val')
-    plt.legend(loc='upper left')
-    plt.savefig('loss.png')
-    plt.clf()
 
 if __name__ == '__main__':
     main()

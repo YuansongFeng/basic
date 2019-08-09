@@ -20,13 +20,13 @@ def load_annotation_field(field_path='anno_field.pl'):
         anno_field = dill.load(f)
     return anno_field
 
-def get_annotation_field(annotation_path, min_freq=3, save_to_path='anno_field.pl'):
+def get_annotation_field(annotation_path, min_freq=2, save_to_path='anno_field.pl'):
     # use spacy english tokenizer
     anno_field = data.Field(init_token=BOS_TOKEN, eos_token=EOS_TOKEN, pad_token=PAD_TOKEN, tokenize='spacy', lower=True)
     # define dataset
     annotation_dataset = CocoAnnotationDataset(annotation_path, anno_field)
     # build vocab out of all annotations
-    anno_field.build_vocab(annotation_dataset, min_freq=min_freq)
+    anno_field.build_vocab(annotation_dataset, min_freq=min_freq, vectors='glove.6B.200d', vectors_cache='.glove_cache')
     # save field to save_to_path
     if save_to_path is not None:
         with open(save_to_path, 'wb') as f:
@@ -42,6 +42,7 @@ class CocoAnnotationDataset(data.Dataset):
         captions = datasets.CocoCaptions(root='/data/feng/coco/images/val2014', annFile=annotation_path)
         count = 0.0
         done = 0.0
+        examples = []
         for (img, target) in captions:
             # don't need img
             for caption in target:
@@ -57,7 +58,7 @@ class CocoAnnotationDataset(data.Dataset):
         super(CocoAnnotationDataset, self).__init__(examples, fields, **kwargs)
 
 def test():
-    vocab = get_annotation_field('/data/feng/coco/annotations/captions_val2014.json')
+    field = get_annotation_field('/data/feng/coco/annotations/captions_val2014.json')
     pdb.set_trace()
 
 # test()

@@ -40,6 +40,8 @@ def translate(inputs, model, bos_label, eos_label, pad_label, beam_size=3, max_l
 
     # remove words after EOS label
     candidate_seqs = [terminate_sent(candidate_seq, eos_label, pad_label) for candidate_seq in candidate_seqs]
+    # cast to tensor
+    candidate_seqs = torch.IntTensor(candidate_seqs)
     return candidate_seqs
 
 def beam_search_step(log_next_word_probs, curr_seqs, curr_log_probs, beam_size):
@@ -49,7 +51,7 @@ def beam_search_step(log_next_word_probs, curr_seqs, curr_log_probs, beam_size):
     curr_len = len(curr_seqs[0])
     curr_seqs = np.array(curr_seqs)
     curr_log_probs = np.array(curr_log_probs)
-    next_seqs = np.zeros((B*beam_size, curr_len+1))
+    next_seqs = np.zeros((B*beam_size, curr_len+1), dtype=np.int16)
     next_log_probs = np.zeros(B*beam_size)
     for sent_idx in range(B):
         # indices of all candidates for the current sentence
@@ -67,9 +69,14 @@ def beam_search_step(log_next_word_probs, curr_seqs, curr_log_probs, beam_size):
         # sum_log_prob[i][j] is the log probability of curr_seq[i] followed by j'th word
         sum_log_prob = log_next_word_prob + curr_log_prob
         # top beam_size candidates 
-        top_b_indices = np.argsort(sum_log_prob.reshape(-1))[-beam_size:]
-        top_b_beam_indices = top_b_indices // vocab_size
-        top_b_vocab_indices = top_b_indices % vocab_size
+        if len(curr_seq[0]) == 2:
+            # initialize the sequence, all current beams are the same ([<s>, <pad>])
+            top_b_beam_indices = np.zeros(beam_size, dtype=np.int16)
+            top_b_vocab_indices = np.argsort(sum_log_prob[0])[-beam_size:]
+        else:
+            top_b_indices = np.argsort(sum_log_prob.reshape(-1))[-beam_size:]
+            top_b_beam_indices = top_b_indices // vocab_size
+            top_b_vocab_indices = top_b_indices % vocab_size
         # [beam_size x [word_0, word_1, ..., word_{n+1}]]
         updated_seq = []
         # [beam_size x (-2.3)]
@@ -84,7 +91,7 @@ def beam_search_step(log_next_word_probs, curr_seqs, curr_log_probs, beam_size):
         next_seqs[candidates_idx] = updated_seq
         next_log_probs[candidates_idx] = updated_log_prob
 
-    return next_seqs.astype(int), next_log_probs
+    return next_seqs, next_log_probs
 
 
 def terminate_sent(input_seq, eos_label, pad_label):
@@ -101,6 +108,8 @@ def test():
     pretrained_checkpoint = 'unittests/transformer/checkpoints/best_acc.pth.tar'
     data_dir = 'unittests/transformer/data'
     batch_size = 20
+    # TODO add diversity to the beams, otherwise all beams are the same 
+    beam_size = 1
 
     dataloaders = dataset.get_dataloader(
         os.path.join(data_dir, 'train.txt'),
@@ -132,7 +141,10 @@ def test():
     for batch_idx, batch in enumerate(dataloaders['valid']):
         # B x N(max_len)
         inputs, targets = batch.src.transpose(0,1), batch.trg.transpose(0,1)
-        predict_seqs = translate(inputs, model, bos_label, eos_label, pad_label, beam_size=3, max_len=30)
+        predict_seqs = translate(inputs, model, bos_label, eos_label, pad_label, beam_size=beam_size, max_len=30)
+        # B*beam_size x N_in
+        inputs = inputs.repeat(1, beam_size).view(inputs.size(0)*beam_size, -1)
+        targets = targets.repeat(1, beam_size).view(targets.size(0)*beam_size, -1)
         pdb.set_trace()
         utils.print_batch_itos(en_vocab, ch_vocab, inputs, targets, predict_seqs, K=5)
 
