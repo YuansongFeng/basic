@@ -36,7 +36,7 @@ class BasicBlock(nn.Module):
 
         # residual connection
         out = out + identity
-        # out = self.relu(out)
+        out = self.relu(out)
 
         return out
 
@@ -80,7 +80,7 @@ class BottleneckBlock(nn.Module):
 
         # residual connection
         out = out + identity
-        # out = self.relu(out)
+        out = self.relu(out)
 
         return out
 
@@ -116,31 +116,24 @@ class ResNet(nn.Module):
         self.relu = nn.ReLU()
     
     def _make_layer(self, BlockType, channel_in, channels_out, num_layer, res_stride=2):
-        layers = []
-        # first block has a stride of 2 for the residual projection
-        layers.append(BlockType(channel_in, channels_out, stride=res_stride))
-        # rest blocks have a stride of 1
-        for i in range(num_layer-1):
-            layers.append(BlockType(channels_out[-1], channels_out))
-
-        return nn.Sequential(*layers)
+        layers = nn.Sequential(
+            # first block has a stride of 2 for the residual projection
+            BlockType(channel_in, channels_out, stride=res_stride),
+            # rest blocks have a stride of 1
+            *[BlockType(channels_out[-1], channels_out) for _ in range(num_layer-1)]
+        )
+        return layers
 
     def forward(self, x):
         # x: B x 3 x W x H
         out = self.conv0(x)
         out = self.max_pool(out)
-        for idx, layer in enumerate(self.res_layers):
-            out = layer(out)
-            # if idx == len(self.res_layers) - 1 and self.output_pooled_feats:
-            #     break
-            out = self.relu(out)
-        
+        out = self.res_layers(out)
         out = self.avg_pool(out)
         # flatten W and H dimensions
         out = out.flatten(start_dim=1)
     
         if self.output_pooled_feats:
-            # out = self.relu(out)
             return out
             
         out = self.projection(out)

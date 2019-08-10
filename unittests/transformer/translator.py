@@ -123,9 +123,10 @@ def test():
     eos_label = en_vocab.stoi[dataset.EOS_TOKEN]
 
     model = Transformer(
-        src_vocab=en_vocab,
-        tgt_vocab=ch_vocab,
-        num_layers=4,
+        src_vocab_size=len(en_vocab),
+        tgt_vocab_size=len(ch_vocab),
+        src_vocab_vectors=en_vocab.vectors,
+        num_layers=2,
         d_k=25,
         d_v=25,
         d_m=100,

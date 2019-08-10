@@ -35,7 +35,7 @@ def main():
     weight_decay = 1e-4
     batch_size = 196
     num_epochs = 500
-    pretrained_checkpoint = 'unittests/transformer/checkpoints/best_acc.pth.tar'
+    # pretrained_checkpoint = 'unittests/transformer/checkpoints/best_acc.pth.tar'
 
     # load custom dataloader for ch-en translation dataset
     dataloaders = dataset.get_dataloader(
@@ -54,7 +54,7 @@ def main():
         src_vocab_size=len(en_vocab),
         tgt_vocab_size=len(ch_vocab),
         src_vocab_vectors=en_vocab.vectors,
-        num_layers=4,
+        num_layers=2,
         d_k=25,
         d_v=25,
         d_m=100,
@@ -63,6 +63,7 @@ def main():
         dropout=0.1,
         pad_label=PAD_LABEL
     ) 
+    # pdb.set_trace()
     # model = Transformer(
     #     len(en_vocab),
     #     len(ch_vocab),
@@ -109,7 +110,7 @@ def main():
 
         if acc > best_acc:
             save_path = os.path.join(checkpoint_dir, 'best_acc.pth.tar')
-            # torch.save(model.state_dict(), save_path)
+            torch.save(model.state_dict(), save_path)
             best_acc = acc
             print('model with accuracy %f saved to path %s' % (acc, save_path))
         
@@ -152,6 +153,9 @@ def train(model, dataloader, criterion, optimizer):
         loss = calculate_loss(outputs, targets, criterion, label_smoothing=True)
         # calculate and store partial derivatives
         loss.backward()
+        # check the gradient is properly flowing 
+        # if batch_idx % 100 == 0:
+        #     utils.plot_grad_flow(model.named_parameters())
         # update all parameters based on partial derivatives
         optimizer.step()
         # make sure to ZERO OUT all parameter gradients to prepare a clean slate for the next batch update

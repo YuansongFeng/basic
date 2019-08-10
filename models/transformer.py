@@ -46,12 +46,15 @@ class MultiheadAttention(nn.Module):
     # scaled, multi-head attention with scaling on Q, K and V matrices
     def __init__(self, num_heads, d_k, d_v, d_m, dropout=0.1):
         super(MultiheadAttention, self).__init__()
-        self.proj_K = nn.ModuleList([nn.Linear(d_m, d_k) for _ in range(num_heads)])
-        self.proj_Q = nn.ModuleList([nn.Linear(d_m, d_k) for _ in range(num_heads)])
-        self.proj_V = nn.ModuleList([nn.Linear(d_m, d_v) for _ in range(num_heads)])
+        self.proj_K = nn.Linear(d_m, d_k*num_heads)
+        self.proj_Q = nn.Linear(d_m, d_k*num_heads)
+        self.proj_V = nn.Linear(d_m, d_v*num_heads)
         self.proj_O = nn.Linear(d_v*num_heads, d_m)
         self.softmax = nn.Softmax(dim=2)
         self.dropout = nn.Dropout(dropout)
+        self.h = num_heads
+        self.d_k = d_k
+        self.d_v = d_v
 
     # attention representation of word w_i is always a function of the
     # word w_i itself, which is required by the weight matrix to be
@@ -59,39 +62,47 @@ class MultiheadAttention(nn.Module):
     def forward(self, Q, K, V, zero_mask=None):
         # Q(query): B x N_q x d_m
         # K(key), V(value): B x N_k x d_m
+        B, N_q, d_m = Q.size()
+        B, N_k, d_m = K.size()
         # zero_mask: B x N_q x N_k
-        # a list to hold weighted_V on the fly. BETTER WAY?
-        weighted_Vs = []
-        for head_idx in range(len(self.proj_K)):
-            # B x N_q x d_k
-            Q_proj = self.proj_Q[head_idx](Q)
-            # B x N_k x d_k
-            K_proj = self.proj_K[head_idx](K)
-            # B x N_k x d_v
-            V_proj = self.proj_V[head_idx](V)
-            # B x N_q x N_k
-            scaled_weight = torch.bmm(Q_proj, K_proj.permute(0, 2, 1)) / math.sqrt(Q_proj.size(2))
-            # VERY IMPORTANT to first mask then softmax, which ensures two things:
-            # 1. representation of w_i does not depends on any word w_{i+k} after w_i,
-            # as otherwise softmax representation will include future words' information
-            # 2. total weights of all Value vectors sum to 1
+        # B x N_q x d_k*h
+        Q_proj = self.proj_Q(Q)
+        # B x N_k x d_k*h
+        K_proj = self.proj_K(K)
+        # B x N_k x d_v*h
+        V_proj = self.proj_V(V)
+        # B x N_q x h x d_k => h x B x N_q x d_k => h*B x N_q x d_k
+        Q_proj = Q_proj.view(B, N_q, self.h, self.d_k).permute(2, 0, 1, 3).contiguous().view(-1, N_q, self.d_k)
+        # h*B x N_k x d_k
+        K_proj = K_proj.view(B, N_k, self.h, self.d_k).permute(2, 0, 1, 3).contiguous().view(-1, N_k, self.d_k)
+        # h*B x N_k x d_v
+        V_proj = V_proj.view(B, N_k, self.h, self.d_v).permute(2, 0, 1, 3).contiguous().view(-1, N_k, self.d_v)
+        # each batch is grouped together for a total of h times along dim 0
+        # h*B x N_q x N_k
+        zero_mask = zero_mask.repeat(self.h, 1, 1)
+        # h*B x N_q x N_k
+        scaled_weight = torch.bmm(Q_proj, K_proj.permute(0, 2, 1)) / math.sqrt(Q_proj.size(2))
+        # VERY IMPORTANT to first mask then softmax, which ensures two things:
+        # 1. representation of w_i does not depends on any word w_{i+k} after w_i,
+        # as otherwise softmax representation will include future words' information
+        # 2. total weights of all Value vectors sum to 1
 
-            # for a word w_i in a sentence, if the jth weight value is masked to 0, then 
-            # the representation of w_i from this MultiheadAttention layer excludes information from word w_j.
-            if zero_mask is not None:
-                # AVOID in-place operation
-                # scaled_weight[zero_mask] = -np.inf
-                scaled_weight = scaled_weight.masked_fill(zero_mask, -np.inf)
-            scaled_weight = self.softmax(scaled_weight)
-            scaled_weight = self.dropout(scaled_weight)
-            # B x N_q x d_v
-            # each row of weighted_V is a weighted sum of V_proj where weight is determined by K_proj and Q_proj
-            weighted_V = torch.bmm(scaled_weight, V_proj)
-            weighted_Vs.append(weighted_V)
-        # B x N_q x d_v*num_heads
-        cat_V = torch.cat(weighted_Vs, dim=2)
+        # for a word w_i in a sentence, if the jth weight value is masked to 0, then 
+        # the representation of w_i from this MultiheadAttention layer excludes information from word w_j.
+        if zero_mask is not None:
+            # AVOID in-place operation
+            # scaled_weight[zero_mask] = -np.inf
+            scaled_weight = scaled_weight.masked_fill(zero_mask, -np.inf)
+        scaled_weight = self.softmax(scaled_weight)
+        scaled_weight = self.dropout(scaled_weight)
+        # h*B x N_q x d_v
+        # each row of weighted_V is a weighted sum of V_proj where weight is determined by K_proj and Q_proj
+        weighted_V = torch.bmm(scaled_weight, V_proj)
+        # h*B x N_q x d_v => h x B x N_q x d_v => B x N_q x h x d_v => B x N_q x h*d_v
+        weighted_V = weighted_V.view(self.h, B, N_q, self.d_v).permute(1, 2, 0, 3).contiguous().view(B, N_q, -1)
         # B x N_q x d_m
-        out = self.proj_O(cat_V)
+        out = self.proj_O(weighted_V)
+        out = self.dropout(out)
 
         return out
 
@@ -249,7 +260,7 @@ class DecoderLayer(nn.Module):
 
 class Transformer(nn.Module):
     def __init__(self, src_vocab_size, tgt_vocab_size, src_vocab_vectors=None, tgt_vocab_vectors=None, 
-                num_layers=1, d_k=64, d_v=64, d_m=512, d_hidden=1024, num_heads=8, dropout=0.1, pad_label=1):
+                num_layers=8, d_k=64, d_v=64, d_m=512, d_hidden=1024, num_heads=8, dropout=0.1, pad_label=1):
         super(Transformer, self).__init__()
         # used for input embedding and output embedding
         # self.src_embedding = Embeddings(src_vocab_size, d_m, padding_idx=pad_label)
@@ -264,10 +275,12 @@ class Transformer(nn.Module):
             assert tgt_vocab_size == tgt_vocab_vectors.size(0)
             self.tgt_embedding.embedding.weight.data.copy_(tgt_vocab_vectors)
         self.pos_enc = PositionEncoding(d_m)
-        self.encoder_layers = nn.Sequential(*[
+        # nn.Sequential vs nn.ModuleList
+        # https://discuss.pytorch.org/t/when-should-i-use-nn-modulelist-and-when-should-i-use-nn-sequential/5463/3
+        self.encoder_layers = nn.ModuleList([
             EncoderLayer(num_heads, d_k, d_v, d_m, d_hidden, dropout) for _ in range(num_layers)
         ])
-        self.decoder_layers = nn.Sequential(*[
+        self.decoder_layers = nn.ModuleList([
             DecoderLayer(num_heads, d_k, d_v, d_m, d_hidden, dropout) for _ in range(num_layers)
         ])
         # reuse the target embedding matrix as a form of regularization

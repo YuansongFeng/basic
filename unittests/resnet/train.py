@@ -15,7 +15,7 @@ from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader
 import torchnet.meter as meter
 from torch.utils.tensorboard import SummaryWriter
-import torchvision.models as models
+# import torchvision.models as models
 import cv2
 
 from models.resnet import ResNet
@@ -29,7 +29,7 @@ proj_weight = None
 def main():
     global proj_weight, features_blobs
     # parameters
-    data_dir = '/data/feng/places365_standard'
+    data_dir = '/data/feng/places365_mini'
     checkpoint_dir = 'unittests/resnet/checkpoints'
     learning_rate = 1e-4
     weight_decay = 1e-4
@@ -84,9 +84,9 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
     # activated_imgs = vis.top_k_activated_images(model, model.layer4[1].conv2, val_loader, K=3)
-    activated_imgs = vis.top_k_activated_images(model, model.res_layers[-1][-1].conv1, val_loader, K=3)
-    utils.output_list_list_imgs(activated_imgs)
-    return
+    # activated_imgs = vis.top_k_activated_images(model, model.res_layers[-1][-1].conv1, val_loader, K=3)
+    # utils.output_list_list_imgs(activated_imgs)
+    # return
 
     # training loop 
     train_acc_hist = []
@@ -105,7 +105,7 @@ def main():
 
         if acc > best_acc:
             save_path = os.path.join(checkpoint_dir, 'best_acc.pth.tar')
-            torch.save(model.state_dict(), save_path)
+            # torch.save(model.state_dict(), save_path)
             best_acc = acc
             print('model with accuracy %f saved to path %s' % (acc, save_path))
         
@@ -128,12 +128,14 @@ def train(model, dataloader, criterion, optimizer):
         preds = outputs.argmax(dim=1)
         # check that the size matches
         assert torch.equal(torch.tensor(preds.size()), torch.tensor(targets.size())), 'prediction and target size mismatch'
-
-        loss = loss = calculate_loss(outputs, targets, criterion, label_smoothing=True)
+        loss = calculate_loss(outputs, targets, criterion, label_smoothing=True)
         # calculate and store partial derivatives
         loss.backward()
         # update all parameters based on partial derivatives
         optimizer.step()
+        # check gradient is properly flowing
+        if batch_idx % 100 == 0:
+            utils.plot_grad_flow(model.named_parameters())
         # make sure to ZERO OUT all parameter gradients to prepare a clean slate for the next batch update
         optimizer.zero_grad()
 
