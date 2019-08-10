@@ -36,7 +36,7 @@ class BasicBlock(nn.Module):
 
         # residual connection
         out = out + identity
-        out = self.relu(out)
+        # out = self.relu(out)
 
         return out
 
@@ -80,7 +80,7 @@ class BottleneckBlock(nn.Module):
 
         # residual connection
         out = out + identity
-        out = self.relu(out)
+        # out = self.relu(out)
 
         return out
 
@@ -113,6 +113,7 @@ class ResNet(nn.Module):
                 self.projection = nn.Linear(2048, num_classes)
         
         self.avg_pool = nn.AvgPool2d(7)
+        self.relu = nn.ReLU()
     
     def _make_layer(self, BlockType, channel_in, channels_out, num_layer, res_stride=2):
         layers = []
@@ -128,14 +129,18 @@ class ResNet(nn.Module):
         # x: B x 3 x W x H
         out = self.conv0(x)
         out = self.max_pool(out)
-        for layer in self.res_layers:
+        for idx, layer in enumerate(self.res_layers):
             out = layer(out)
+            # if idx == len(self.res_layers) - 1 and self.output_pooled_feats:
+            #     break
+            out = self.relu(out)
         
         out = self.avg_pool(out)
         # flatten W and H dimensions
         out = out.flatten(start_dim=1)
     
         if self.output_pooled_feats:
+            # out = self.relu(out)
             return out
             
         out = self.projection(out)

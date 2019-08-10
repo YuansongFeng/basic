@@ -134,7 +134,7 @@ class PositionEncoding(nn.Module):
         pe[:, 0::2] = torch.sin(division)
         pe[:, 1::2] = torch.cos(division)
         # max_len x d_m
-        self.pe = nn.Parameter(pe)
+        self.pe = nn.Parameter(pe, requires_grad=False)
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x):
@@ -252,12 +252,13 @@ class Transformer(nn.Module):
                 num_layers=1, d_k=64, d_v=64, d_m=512, d_hidden=1024, num_heads=8, dropout=0.1, pad_label=1):
         super(Transformer, self).__init__()
         # used for input embedding and output embedding
-        self.src_embedding = Embeddings(src_vocab_size, d_m, padding_idx=pad_label)
+        # self.src_embedding = Embeddings(src_vocab_size, d_m, padding_idx=pad_label)
+        self.src_embedding = nn.Linear(src_vocab_size, d_m, bias=False)
         self.tgt_embedding = Embeddings(tgt_vocab_size, d_m, padding_idx=pad_label)
-        if src_vocab_vectors is not None:
-            assert d_m == src_vocab_vectors.size(1)
-            assert src_vocab_size == src_vocab_vectors.size(0)
-            self.src_embedding.embedding.weight.data.copy_(src_vocab_vectors)
+        # if src_vocab_vectors is not None:
+        #     assert d_m == src_vocab_vectors.size(1)
+        #     assert src_vocab_size == src_vocab_vectors.size(0)
+        #     self.src_embedding.embedding.weight.data.copy_(src_vocab_vectors)
         if tgt_vocab_vectors is not None:
             assert d_m == tgt_vocab_vectors.size(1)
             assert tgt_vocab_size == tgt_vocab_vectors.size(0)
@@ -276,14 +277,23 @@ class Transformer(nn.Module):
     
     def forward(self, inputs, outputs):
         # inputs: B x N_in
+        # where if inputs[b, i] > 0, the word i is active
+        B, N_in = inputs.size()
+
+        # B x N_in x N_in
+        diag_inputs = torch.zeros(B, N_in, N_in).to(inputs.device)
+        for b in range(B):
+            diag_inputs[b] = torch.diag(inputs[b])
+        # pad_mask = inputs.eq(0)
+        # inputs[pad_mask] = self.pad_label
+
         # outputs: B x N_out
         # where input/output < vocab_size
-        assert torch.all(inputs < self.src_embedding.vocab_size)
         assert torch.all(outputs < self.tgt_embedding.vocab_size)
         # use the first N-1 words(given output) to predict last N-1 words(target) 
         outputs = outputs[:, :-1]
         # B x N_in x d_m
-        input_enc = self.src_embedding(inputs)
+        input_enc = self.src_embedding(diag_inputs)
         # B x N_in x d_m
         input_enc = self.pos_enc(input_enc)
         # encoder padding mask
@@ -295,7 +305,6 @@ class Transformer(nn.Module):
         for encoder_layer in self.encoder_layers:
             # B x N_in x d_m
             input_enc = encoder_layer(input_enc, self_att_mask=enc_self_att_mask, non_pad_mask=enc_non_pad_mask)
-
         # B x N_out x d_m
         output_enc = self.tgt_embedding(outputs)
         # B x N_out x d_m

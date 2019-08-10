@@ -158,6 +158,10 @@ def train(model, dataloader, criterion, optimizer, anno_field, device):
         loss.backward()
         # update all parameters based on partial derivatives
         optimizer.step()
+
+        if batch_idx % 100 == 0:
+            utils.plot_grad_flow(model.named_parameters())
+        
         # make sure to ZERO OUT all parameter gradients to prepare a clean slate for the next batch update
         optimizer.zero_grad()
 
