@@ -1,4 +1,7 @@
 import os
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import cv2
 import random
 
@@ -51,4 +54,23 @@ def output_history_graph(train_acc_history, val_acc_history, train_loss_history,
     plt.plot(list(range(epochs)), val_loss_history, label='val')
     plt.legend(loc='upper left')
     plt.savefig('loss.png')
+    plt.clf()
+
+def plot_grad_flow(named_parameters):
+    ave_grads = []
+    layers = []
+    for n, p in named_parameters:
+        if(p.requires_grad) and ("bias" not in n) and ('norm' not in n):
+            layers.append(n)
+            ave_grads.append(p.grad.abs().mean().cpu())
+    plt.plot(ave_grads, alpha=0.3, color="b")
+    plt.hlines(0, 0, len(ave_grads)+1, linewidth=1, color="k" )
+    plt.xticks(range(len(ave_grads)), layers, rotation="vertical")
+    plt.xlim(xmin=0, xmax=len(ave_grads))
+    plt.xlabel("Layers")
+    plt.ylabel("average gradient")
+    plt.title("Gradient flow")
+    plt.grid(True)
+    plt.savefig('grad.png')
+    print('gradient flow graph saved to grad.png')
     plt.clf()
