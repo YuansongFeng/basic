@@ -18,9 +18,6 @@ import torchnet.meter as meter
 from models.transformer import Transformer
 import dataset
 import utils
-# import Transformer from delldu's repo
-from transformer.Models import Transformer
-import transformer.Constants as Constants
 import pdb
 
 PAD_LABEL = None
@@ -33,7 +30,8 @@ def main():
     # it helps to gradually decrease learning rate
     learning_rate = 1e-3
     weight_decay = 0
-    batch_size = 1
+    # As a sanity check, try to overfit the model with ONE example and expect a training acc. of 100%
+    batch_size = 16
     num_epochs = 50000
     # pretrained_checkpoint = 'unittests/transformer/checkpoints/best_acc.pth.tar'
 
@@ -41,15 +39,14 @@ def main():
     dataloaders = dataset.get_dataloader(
         os.path.join(data_dir, 'train.txt'),
         os.path.join(data_dir, 'valid.txt'),
-        batch_size=batch_size
+        batch_size=batch_size,
+        shuffle=False
     )
     en_vocab = dataloaders['en_vocab']
     ch_vocab = dataloaders['ch_vocab']
     PAD_LABEL = en_vocab.stoi[dataset.PAD_TOKEN]
     assert en_vocab.stoi[dataset.PAD_TOKEN] == ch_vocab.stoi[dataset.PAD_TOKEN]
 
-    # load model
-    # As we don't have much training data, use small feature dimension(dk, dv, dm)
     # model = Transformer(
     #     src_vocab_size=len(en_vocab),
     #     tgt_vocab_size=len(ch_vocab),
@@ -58,30 +55,19 @@ def main():
     #     d_k=64,
     #     d_v=64,
     #     d_m=512,
-    #     d_hidden=1024,
+    #     d_hidden=2048,
     #     num_heads=8,
     #     dropout=0.1,
     #     pad_label=PAD_LABEL
     # ) 
-    # pdb.set_trace()
+    # transformer built on top of nn.Transformer
     model = Transformer(
-        len(en_vocab),
-        len(ch_vocab),
-        100,
-        tgt_emb_prj_weight_sharing=True,
-        emb_src_tgt_weight_sharing=False,
-        d_k=64,
-        d_v=64,
-        d_model=512,
-        d_word_vec=512,
-        d_inner=1024,
-        # use shallow net cause we have small training data
-        n_layers=1,
-        n_head=8,
-        # dropout helps
-        dropout=0.2) 
+        src_vocab_size=len(en_vocab),
+        tgt_vocab_size=len(ch_vocab),
+        pad_label=PAD_LABEL
+    )
     # DataParallel helps the most if batch_size is big, in order to justify the communication cost
-    model = nn.DataParallel(model).to(torch.device('cuda'))
+    model.to(torch.device('cuda'))
 
     if 'pretrained_checkpoint' in locals() and pretrained_checkpoint is not None:
         model.load_state_dict(torch.load(pretrained_checkpoint))
@@ -101,6 +87,8 @@ def main():
         train_acc_hist.append(acc)
         train_loss_hist.append(loss)
         # TODO: testing if model can overfit 
+        if epoch % 20 == 0:
+            utils.output_history_graph(train_acc_hist, None, train_loss_hist, None)
         print('epoch %i' % epoch)
         continue
         loss, acc = evaluate(model, dataloaders['valid'], criterion, en_vocab, ch_vocab)
@@ -129,22 +117,13 @@ def train(model, dataloader, criterion, optimizer):
     model.train()
 
     for batch_idx, batch in enumerate(dataloader):
+        if batch_idx > 0:
+            break
         # B x N(max_len)
         inputs, targets = batch.src.transpose(0,1), batch.trg.transpose(0,1)
-
-        # input_pos TODO: test on delldu's transformer
-        input_pos = torch.arange(1, inputs.size(1)+1).unsqueeze(0).repeat(inputs.size(0), 1).cuda()
-        pad_mask = inputs.eq(PAD_LABEL)
-        input_pos = input_pos.masked_fill(pad_mask, 0)
-
-        # input_pos TODO: test on delldu's transformer
-        target_pos = torch.arange(1, targets.size(1)+1).unsqueeze(0).repeat(targets.size(0), 1).cuda()
-        pad_mask = targets.eq(PAD_LABEL)
-        target_pos = target_pos.masked_fill(pad_mask, 0)
-
         # both translation source and target are inputted to the model
         # B x N-1 x vocab_size
-        outputs = model(inputs, input_pos, targets, target_pos)
+        outputs = model(inputs, targets)
         # B x N-1
         preds = outputs.argmax(2)
         # use the first N-1 words(targets[:, :-1]) to predict last N-1 words(targets[:, 1:])
@@ -169,8 +148,6 @@ def train(model, dataloader, criterion, optimizer):
 
         if batch_idx % 100 == 0:
             print('batch: %i loss: %f acc: %f' % (batch_idx, loss_meter.mean, acc_meter.mean))
-        if batch_idx > 0:
-            break
     return loss_meter.mean, acc_meter.mean
 
     
@@ -182,17 +159,6 @@ def evaluate(model, dataloader, criterion, en_vocab, ch_vocab):
 
     for batch_idx, batch in enumerate(dataloader):
         inputs, targets = batch.src.transpose(0,1), batch.trg.transpose(0,1)
-
-        # input_pos
-        input_pos = torch.arange(1, inputs.size(1)+1).unsqueeze(0).repeat(inputs.size(0), 1).cuda()
-        pad_mask = inputs.eq(PAD_LABEL)
-        input_pos = input_pos.masked_fill(pad_mask, 0)
-
-        # input_pos
-        target_pos = torch.arange(1, targets.size(1)+1).unsqueeze(0).repeat(targets.size(0), 1).cuda()
-        pad_mask = targets.eq(PAD_LABEL)
-        target_pos = target_pos.masked_fill(pad_mask, 0)
-
         outputs = model(inputs, targets)
         preds = outputs.argmax(2)
         targets = targets[:, 1:]
