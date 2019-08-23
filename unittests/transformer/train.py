@@ -19,8 +19,8 @@ from models.transformer import Transformer
 import dataset
 import utils
 # import Transformer from delldu's repo
-# from transformer.Models import Transformer
-# import transformer.Constants as Constants
+from transformer.Models import Transformer
+import transformer.Constants as Constants
 import pdb
 
 PAD_LABEL = None
@@ -32,9 +32,9 @@ def main():
     checkpoint_dir = 'unittests/transformer/checkpoints'
     # it helps to gradually decrease learning rate
     learning_rate = 1e-3
-    weight_decay = 1e-4
-    batch_size = 196
-    num_epochs = 500
+    weight_decay = 0
+    batch_size = 1
+    num_epochs = 50000
     # pretrained_checkpoint = 'unittests/transformer/checkpoints/best_acc.pth.tar'
 
     # load custom dataloader for ch-en translation dataset
@@ -50,36 +50,36 @@ def main():
 
     # load model
     # As we don't have much training data, use small feature dimension(dk, dv, dm)
-    model = Transformer(
-        src_vocab_size=len(en_vocab),
-        tgt_vocab_size=len(ch_vocab),
-        src_vocab_vectors=en_vocab.vectors,
-        num_layers=2,
-        d_k=25,
-        d_v=25,
-        d_m=100,
-        d_hidden=256,
-        num_heads=4,
-        dropout=0.1,
-        pad_label=PAD_LABEL
-    ) 
-    # pdb.set_trace()
     # model = Transformer(
-    #     len(en_vocab),
-    #     len(ch_vocab),
-    #     100,
-    #     tgt_emb_prj_weight_sharing=True,
-    #     emb_src_tgt_weight_sharing=False,
-    #     d_k=32,
-    #     d_v=32,
-    #     d_model=128,
-    #     d_word_vec=128,
-    #     d_inner=256,
-    #     # use shallow net cause we have small training data
-    #     n_layers=1,
-    #     n_head=4,
-    #     # dropout helps
-    #     dropout=0.2) 
+    #     src_vocab_size=len(en_vocab),
+    #     tgt_vocab_size=len(ch_vocab),
+    #     # src_vocab_vectors=en_vocab.vectors,
+    #     num_layers=2,
+    #     d_k=64,
+    #     d_v=64,
+    #     d_m=512,
+    #     d_hidden=1024,
+    #     num_heads=8,
+    #     dropout=0.1,
+    #     pad_label=PAD_LABEL
+    # ) 
+    # pdb.set_trace()
+    model = Transformer(
+        len(en_vocab),
+        len(ch_vocab),
+        100,
+        tgt_emb_prj_weight_sharing=True,
+        emb_src_tgt_weight_sharing=False,
+        d_k=64,
+        d_v=64,
+        d_model=512,
+        d_word_vec=512,
+        d_inner=1024,
+        # use shallow net cause we have small training data
+        n_layers=1,
+        n_head=8,
+        # dropout helps
+        dropout=0.2) 
     # DataParallel helps the most if batch_size is big, in order to justify the communication cost
     model = nn.DataParallel(model).to(torch.device('cuda'))
 
@@ -100,7 +100,9 @@ def main():
         loss, acc = train(model, dataloaders['train'], criterion, optimizer)
         train_acc_hist.append(acc)
         train_loss_hist.append(loss)
-
+        # TODO: testing if model can overfit 
+        print('epoch %i' % epoch)
+        continue
         loss, acc = evaluate(model, dataloaders['valid'], criterion, en_vocab, ch_vocab)
         val_acc_hist.append(acc)
         val_loss_hist.append(loss)
@@ -142,7 +144,7 @@ def train(model, dataloader, criterion, optimizer):
 
         # both translation source and target are inputted to the model
         # B x N-1 x vocab_size
-        outputs = model(inputs, targets)
+        outputs = model(inputs, input_pos, targets, target_pos)
         # B x N-1
         preds = outputs.argmax(2)
         # use the first N-1 words(targets[:, :-1]) to predict last N-1 words(targets[:, 1:])
@@ -167,6 +169,8 @@ def train(model, dataloader, criterion, optimizer):
 
         if batch_idx % 100 == 0:
             print('batch: %i loss: %f acc: %f' % (batch_idx, loss_meter.mean, acc_meter.mean))
+        if batch_idx > 0:
+            break
     return loss_meter.mean, acc_meter.mean
 
     
