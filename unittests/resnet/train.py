@@ -35,12 +35,12 @@ def main():
     weight_decay = 1e-4
     batch_size = 64
     num_epochs = 150
-    pretrained_weight = 'unittests/resnet/checkpoints/acc_82.pth.tar'
-    device = torch.device('cuda:0')
+    # pretrained_weight = 'unittests/resnet/checkpoints/acc_82.pth.tar'
+    device = torch.device('cuda:1')
 
     # load model 
     model = ResNet('resnet18', num_classes=10)
-    # model = models.resnet18(num_classes=365)
+    # model = models.resnet18(pretrained=True)
     if pretrained_weight is not None:
         model.load_state_dict(torch.load(pretrained_weight))
         # cause we are using downloaded resnet for 365 classes, change the projection layer to be 10
@@ -121,8 +121,8 @@ def train(model, dataloader, criterion, optimizer):
     model.train()
 
     for batch_idx, (inputs, targets) in enumerate(dataloader):
-        inputs = inputs.to(torch.device('cuda:0'))
-        targets = targets.to(torch.device('cuda:0'))
+        inputs = inputs.to(torch.device('cuda:1'))
+        targets = targets.to(torch.device('cuda:1'))
         # outputs did NOT go thru softmax. per-class values don't sum to one
         outputs = model(inputs)
         preds = outputs.argmax(dim=1)
@@ -134,8 +134,8 @@ def train(model, dataloader, criterion, optimizer):
         # update all parameters based on partial derivatives
         optimizer.step()
         # check gradient is properly flowing
-        if batch_idx % 100 == 0:
-            utils.plot_grad_flow(model.named_parameters())
+        # if batch_idx % 100 == 0:
+        #     utils.plot_grad_flow(model.named_parameters())
         # make sure to ZERO OUT all parameter gradients to prepare a clean slate for the next batch update
         optimizer.zero_grad()
 
@@ -155,8 +155,8 @@ def evaluate(model, dataloader, criterion):
     model.eval()
 
     for batch_idx, (inputs, targets) in enumerate(dataloader):
-        inputs = inputs.to(torch.device('cuda:0'))
-        targets = targets.to(torch.device('cuda:0'))
+        inputs = inputs.to(torch.device('cuda:1'))
+        targets = targets.to(torch.device('cuda:1'))
         outputs = model(inputs)
         preds = outputs.argmax(dim=1)
         # check that the size matches

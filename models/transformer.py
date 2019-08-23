@@ -79,8 +79,6 @@ class MultiheadAttention(nn.Module):
         V_proj = V_proj.view(B, N_k, self.h, self.d_v).permute(2, 0, 1, 3).contiguous().view(-1, N_k, self.d_v)
         # each batch is grouped together for a total of h times along dim 0
         # h*B x N_q x N_k
-        zero_mask = zero_mask.repeat(self.h, 1, 1)
-        # h*B x N_q x N_k
         scaled_weight = torch.bmm(Q_proj, K_proj.permute(0, 2, 1)) / math.sqrt(Q_proj.size(2))
         # VERY IMPORTANT to first mask then softmax, which ensures two things:
         # 1. representation of w_i does not depends on any word w_{i+k} after w_i,
@@ -90,6 +88,7 @@ class MultiheadAttention(nn.Module):
         # for a word w_i in a sentence, if the jth weight value is masked to 0, then 
         # the representation of w_i from this MultiheadAttention layer excludes information from word w_j.
         if zero_mask is not None:
+            zero_mask = zero_mask.repeat(self.h, 1, 1)
             # AVOID in-place operation
             # scaled_weight[zero_mask] = -np.inf
             scaled_weight = scaled_weight.masked_fill(zero_mask, -np.inf)
@@ -264,7 +263,7 @@ class Transformer(nn.Module):
         super(Transformer, self).__init__()
         # used for input embedding and output embedding
         # self.src_embedding = Embeddings(src_vocab_size, d_m, padding_idx=pad_label)
-        self.src_embedding = nn.Linear(src_vocab_size, d_m, bias=False)
+        # self.src_embedding = nn.Linear(src_vocab_size, d_m)
         self.tgt_embedding = Embeddings(tgt_vocab_size, d_m, padding_idx=pad_label)
         # if src_vocab_vectors is not None:
         #     assert d_m == src_vocab_vectors.size(1)
@@ -289,39 +288,31 @@ class Transformer(nn.Module):
         self.pad_label = pad_label
     
     def forward(self, inputs, outputs):
-        # inputs: B x N_in
-        # where if inputs[b, i] > 0, the word i is active
-        B, N_in = inputs.size()
-
-        # B x N_in x N_in
-        diag_inputs = torch.zeros(B, N_in, N_in).to(inputs.device)
-        for b in range(B):
-            diag_inputs[b] = torch.diag(inputs[b])
-        # pad_mask = inputs.eq(0)
-        # inputs[pad_mask] = self.pad_label
+        # inputs: B x N_in x C
+        B, N_in, C = inputs.size()
+        # B x C
+        # avg_pool = inputs.mean(dim=1)
+        # B x N_in x C
+        input_enc = inputs
+        # TODO better way
+        inputs = torch.ones(B, N_in).to(inputs.device) * 5
+        assert 5 != self.pad_label
 
         # outputs: B x N_out
         # where input/output < vocab_size
         assert torch.all(outputs < self.tgt_embedding.vocab_size)
         # use the first N-1 words(given output) to predict last N-1 words(target) 
         outputs = outputs[:, :-1]
-        # B x N_in x d_m
-        input_enc = self.src_embedding(diag_inputs)
-        # B x N_in x d_m
-        input_enc = self.pos_enc(input_enc)
-        # encoder padding mask
-        # B x N_in x 1
-        enc_non_pad_mask = get_non_pad_mask(inputs, self.pad_label)
-        # encoder self attention mask, leave out padding token
-        # B x N_in x N_in
-        enc_self_att_mask = get_att_padding_mask(seq_q=inputs, seq_k=inputs, pad_label=self.pad_label)
+        
         for encoder_layer in self.encoder_layers:
             # B x N_in x d_m
-            input_enc = encoder_layer(input_enc, self_att_mask=enc_self_att_mask, non_pad_mask=enc_non_pad_mask)
+            input_enc = encoder_layer(input_enc, self_att_mask=None, non_pad_mask=get_non_pad_mask(inputs, self.pad_label))
         # B x N_out x d_m
         output_enc = self.tgt_embedding(outputs)
         # B x N_out x d_m
         output_enc = self.pos_enc(output_enc)
+        # set the <s> embedding to be the avg pooled image feature
+        # output_enc[:, 0, :] = avg_pool
         # decoder padding mask
         # B x N_out x 1
         dec_non_pad_mask = get_non_pad_mask(outputs, self.pad_label)
@@ -330,13 +321,12 @@ class Transformer(nn.Module):
         dec_self_att_mask = (get_att_padding_mask(seq_q=outputs, seq_k=outputs, pad_label=self.pad_label) + get_subsequent_mask(outputs)).gt(0)
         # encoder-decoder attention mask, leave out padding token
         # B x N_out x N_in
-        enc_dec_att_mask = get_att_padding_mask(seq_q=outputs, seq_k=inputs, pad_label=self.pad_label)
-        
+        # enc_dec_att_mask = get_att_padding_mask(seq_q=outputs, seq_k=inputs, pad_label=self.pad_label)
         for decoder_layer in self.decoder_layers:
             # input_enc stays the same while output_enc gets updated
             # what happens if we match sublayers of encoder to sublayers of decoder?
             # B x N_out x d_m
-            output_enc = decoder_layer(input_enc, output_enc, self_att_mask=get_subsequent_mask(outputs), enc_dec_att_mask=enc_dec_att_mask, non_pad_mask=dec_non_pad_mask)
+            output_enc = decoder_layer(input_enc, output_enc, self_att_mask=dec_self_att_mask, enc_dec_att_mask=None, non_pad_mask=dec_non_pad_mask)
         # B x N_out x vocab_size
         out = self.proj(output_enc)
 
