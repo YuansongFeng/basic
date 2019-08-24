@@ -7,7 +7,7 @@ import numpy as np
 import pdb
 
 class Transformer(nn.Module):
-    def __init__(self, src_vocab_size, tgt_vocab_size, pad_label, d_model=512, nhead=8, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=2048, 
+    def __init__(self, src_vocab_size, tgt_vocab_size, pad_label, d_model=512, nhead=8, num_encoder_layers=6, num_decoder_layers=6, dim_feedforward=2048, 
         dropout=0.1, custom_encoder=None, custom_decoder=None):
         super(Transformer, self).__init__()
         # used for input embedding and output embedding

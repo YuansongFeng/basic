@@ -28,11 +28,12 @@ def main():
     data_dir = 'unittests/transformer/data'
     checkpoint_dir = 'unittests/transformer/checkpoints'
     # it helps to gradually decrease learning rate
-    learning_rate = 1e-3
+    learning_rate = 5e-3
     weight_decay = 0
     # As a sanity check, try to overfit the model with ONE example and expect a training acc. of 100%
-    batch_size = 16
-    num_epochs = 50000
+    batch_size = 64
+    num_epochs = 500
+    device = torch.device('cuda:0')
     # pretrained_checkpoint = 'unittests/transformer/checkpoints/best_acc.pth.tar'
 
     # load custom dataloader for ch-en translation dataset
@@ -40,6 +41,7 @@ def main():
         os.path.join(data_dir, 'train.txt'),
         os.path.join(data_dir, 'valid.txt'),
         batch_size=batch_size,
+        device=device,
         shuffle=False
     )
     en_vocab = dataloaders['en_vocab']
@@ -47,32 +49,25 @@ def main():
     PAD_LABEL = en_vocab.stoi[dataset.PAD_TOKEN]
     assert en_vocab.stoi[dataset.PAD_TOKEN] == ch_vocab.stoi[dataset.PAD_TOKEN]
 
-    # model = Transformer(
-    #     src_vocab_size=len(en_vocab),
-    #     tgt_vocab_size=len(ch_vocab),
-    #     # src_vocab_vectors=en_vocab.vectors,
-    #     num_layers=2,
-    #     d_k=64,
-    #     d_v=64,
-    #     d_m=512,
-    #     d_hidden=2048,
-    #     num_heads=8,
-    #     dropout=0.1,
-    #     pad_label=PAD_LABEL
-    # ) 
     # transformer built on top of nn.Transformer
     model = Transformer(
         src_vocab_size=len(en_vocab),
         tgt_vocab_size=len(ch_vocab),
-        pad_label=PAD_LABEL
+        pad_label=PAD_LABEL,
+        d_model=512, 
+        nhead=8, 
+        num_encoder_layers=3, 
+        num_decoder_layers=3, 
+        dim_feedforward=2048, 
+        dropout=0.1
     )
     # DataParallel helps the most if batch_size is big, in order to justify the communication cost
-    model.to(torch.device('cuda'))
+    model.to(device)
 
     if 'pretrained_checkpoint' in locals() and pretrained_checkpoint is not None:
         model.load_state_dict(torch.load(pretrained_checkpoint))
 
-    criterion = nn.CrossEntropyLoss().cuda()
+    criterion = nn.CrossEntropyLoss().to(device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.98), weight_decay=weight_decay)
     scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, verbose=True, patience=15)
 
@@ -86,11 +81,7 @@ def main():
         loss, acc = train(model, dataloaders['train'], criterion, optimizer)
         train_acc_hist.append(acc)
         train_loss_hist.append(loss)
-        # TODO: testing if model can overfit 
-        if epoch % 20 == 0:
-            utils.output_history_graph(train_acc_hist, None, train_loss_hist, None)
-        print('epoch %i' % epoch)
-        continue
+        
         loss, acc = evaluate(model, dataloaders['valid'], criterion, en_vocab, ch_vocab)
         val_acc_hist.append(acc)
         val_loss_hist.append(loss)
@@ -117,8 +108,6 @@ def train(model, dataloader, criterion, optimizer):
     model.train()
 
     for batch_idx, batch in enumerate(dataloader):
-        if batch_idx > 0:
-            break
         # B x N(max_len)
         inputs, targets = batch.src.transpose(0,1), batch.trg.transpose(0,1)
         # both translation source and target are inputted to the model
