@@ -18,9 +18,6 @@ import torchnet.meter as meter
 from models.transformer import Transformer
 import dataset
 import utils
-# import Transformer from delldu's repo
-# from transformer.Models import Transformer
-# import transformer.Constants as Constants
 import pdb
 
 PAD_LABEL = None
@@ -31,62 +28,46 @@ def main():
     data_dir = 'unittests/transformer/data'
     checkpoint_dir = 'unittests/transformer/checkpoints'
     # it helps to gradually decrease learning rate
-    learning_rate = 1e-3
-    weight_decay = 1e-4
-    batch_size = 196
+    learning_rate = 5e-3
+    weight_decay = 0
+    # As a sanity check, try to overfit the model with ONE example and expect a training acc. of 100%
+    batch_size = 64
     num_epochs = 500
+    device = torch.device('cuda:0')
     # pretrained_checkpoint = 'unittests/transformer/checkpoints/best_acc.pth.tar'
 
     # load custom dataloader for ch-en translation dataset
     dataloaders = dataset.get_dataloader(
         os.path.join(data_dir, 'train.txt'),
         os.path.join(data_dir, 'valid.txt'),
-        batch_size=batch_size
+        batch_size=batch_size,
+        device=device,
+        shuffle=False
     )
     en_vocab = dataloaders['en_vocab']
     ch_vocab = dataloaders['ch_vocab']
     PAD_LABEL = en_vocab.stoi[dataset.PAD_TOKEN]
     assert en_vocab.stoi[dataset.PAD_TOKEN] == ch_vocab.stoi[dataset.PAD_TOKEN]
 
-    # load model
-    # As we don't have much training data, use small feature dimension(dk, dv, dm)
+    # transformer built on top of nn.Transformer
     model = Transformer(
         src_vocab_size=len(en_vocab),
         tgt_vocab_size=len(ch_vocab),
-        src_vocab_vectors=en_vocab.vectors,
-        num_layers=2,
-        d_k=25,
-        d_v=25,
-        d_m=100,
-        d_hidden=256,
-        num_heads=4,
-        dropout=0.1,
-        pad_label=PAD_LABEL
-    ) 
-    # pdb.set_trace()
-    # model = Transformer(
-    #     len(en_vocab),
-    #     len(ch_vocab),
-    #     100,
-    #     tgt_emb_prj_weight_sharing=True,
-    #     emb_src_tgt_weight_sharing=False,
-    #     d_k=32,
-    #     d_v=32,
-    #     d_model=128,
-    #     d_word_vec=128,
-    #     d_inner=256,
-    #     # use shallow net cause we have small training data
-    #     n_layers=1,
-    #     n_head=4,
-    #     # dropout helps
-    #     dropout=0.2) 
+        pad_label=PAD_LABEL,
+        d_model=512, 
+        nhead=8, 
+        num_encoder_layers=3, 
+        num_decoder_layers=3, 
+        dim_feedforward=2048, 
+        dropout=0.1
+    )
     # DataParallel helps the most if batch_size is big, in order to justify the communication cost
-    model = nn.DataParallel(model).to(torch.device('cuda'))
+    model.to(device)
 
     if 'pretrained_checkpoint' in locals() and pretrained_checkpoint is not None:
         model.load_state_dict(torch.load(pretrained_checkpoint))
 
-    criterion = nn.CrossEntropyLoss().cuda()
+    criterion = nn.CrossEntropyLoss().to(device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.98), weight_decay=weight_decay)
     scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, verbose=True, patience=15)
 
@@ -100,7 +81,7 @@ def main():
         loss, acc = train(model, dataloaders['train'], criterion, optimizer)
         train_acc_hist.append(acc)
         train_loss_hist.append(loss)
-
+        
         loss, acc = evaluate(model, dataloaders['valid'], criterion, en_vocab, ch_vocab)
         val_acc_hist.append(acc)
         val_loss_hist.append(loss)
@@ -129,17 +110,6 @@ def train(model, dataloader, criterion, optimizer):
     for batch_idx, batch in enumerate(dataloader):
         # B x N(max_len)
         inputs, targets = batch.src.transpose(0,1), batch.trg.transpose(0,1)
-
-        # input_pos TODO: test on delldu's transformer
-        input_pos = torch.arange(1, inputs.size(1)+1).unsqueeze(0).repeat(inputs.size(0), 1).cuda()
-        pad_mask = inputs.eq(PAD_LABEL)
-        input_pos = input_pos.masked_fill(pad_mask, 0)
-
-        # input_pos TODO: test on delldu's transformer
-        target_pos = torch.arange(1, targets.size(1)+1).unsqueeze(0).repeat(targets.size(0), 1).cuda()
-        pad_mask = targets.eq(PAD_LABEL)
-        target_pos = target_pos.masked_fill(pad_mask, 0)
-
         # both translation source and target are inputted to the model
         # B x N-1 x vocab_size
         outputs = model(inputs, targets)
@@ -178,17 +148,6 @@ def evaluate(model, dataloader, criterion, en_vocab, ch_vocab):
 
     for batch_idx, batch in enumerate(dataloader):
         inputs, targets = batch.src.transpose(0,1), batch.trg.transpose(0,1)
-
-        # input_pos
-        input_pos = torch.arange(1, inputs.size(1)+1).unsqueeze(0).repeat(inputs.size(0), 1).cuda()
-        pad_mask = inputs.eq(PAD_LABEL)
-        input_pos = input_pos.masked_fill(pad_mask, 0)
-
-        # input_pos
-        target_pos = torch.arange(1, targets.size(1)+1).unsqueeze(0).repeat(targets.size(0), 1).cuda()
-        pad_mask = targets.eq(PAD_LABEL)
-        target_pos = target_pos.masked_fill(pad_mask, 0)
-
         outputs = model(inputs, targets)
         preds = outputs.argmax(2)
         targets = targets[:, 1:]

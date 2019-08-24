@@ -32,12 +32,11 @@ def main():
     anno_train_dir = '/data/feng/coco/annotations/captions_train2014.json'
     anno_val_dir = '/data/feng/coco/annotations/captions_val2014.json'
     checkpoint_dir = 'checkpoints'
-    learning_rate = 5e-3
-    weight_decay = 0
+    learning_rate = 1e-3
     # effective batch size is batch_size*K(caps_per_img)
-    batch_size = 16
+    batch_size = 8
     num_epochs = 300
-    device = torch.device('cuda:0')
+    device = torch.device('cuda:1')
     # pretrained_checkpoint = 'checkpoints/best_acc.pth.tar'
 
     # load vocab to numericalize annotations
@@ -63,7 +62,7 @@ def main():
             annFile=anno_train_dir, 
             transform=image_transform
         ), 
-        batch_size=batch_size, shuffle=True, pin_memory=True, num_workers=4
+        batch_size=batch_size, shuffle=False, pin_memory=True, num_workers=4
     )
     val_loader = DataLoader(
         datasets.CocoCaptions(
@@ -71,32 +70,30 @@ def main():
             annFile=anno_val_dir, 
             transform=image_transform
         ), 
-        batch_size=batch_size, shuffle=True, pin_memory=True, num_workers=4
+        batch_size=batch_size, shuffle=False, pin_memory=True, num_workers=4
     )
 
     # load model 
     model = Ensemble(
-        filter_vocab_size=512, 
         tgt_vocab_size=len(anno_vocab),
-        tgt_vocab_vectors=anno_vocab.vectors,
-        pad_label=PAD_LABEL
+        pad_label=PAD_LABEL,
+        d_model=512, 
+        nhead=8, 
+        num_encoder_layers=2, 
+        num_decoder_layers=2, 
+        dim_feedforward=2048, 
+        dropout=0.1
     )
     # batch_size should be relatively big to take effective advantage of DataParallel
     # model = nn.DataParallel(model).to(device)
     model.to(device)
-
-    # initialize model 
-    def init_weight(m):
-        if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
-            nn.init.xavier_normal_(m.weight.data)
-    model.apply(init_weight)
 
     if 'pretrained_checkpoint' in locals() and pretrained_checkpoint is not None:
         model.load_state_dict(torch.load(pretrained_checkpoint))
         print('loaded pre-trained model from %s' % pretrained_checkpoint)
 
     criterion = nn.CrossEntropyLoss().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.98), weight_decay=weight_decay)
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.98))
     scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, verbose=True, patience=15)
 
     # training loop 
@@ -109,7 +106,7 @@ def main():
         loss, acc = train(model, train_loader, criterion, optimizer, anno_field, device)
         train_acc_hist.append(acc)
         train_loss_hist.append(loss)
-        continue
+
         loss, acc = evaluate(model, val_loader, criterion, anno_field, device)
         val_acc_hist.append(acc)
         val_loss_hist.append(loss)
@@ -136,15 +133,6 @@ def train(model, dataloader, criterion, optimizer, anno_field, device):
 
     model.train()
 
-    # store resnet activations
-    activations = [None]
-    def get_activation():
-        def hook(model, input, output):
-            activations[0] = output.detach()
-        return hook
-    # model.resnet.register_forward_hook(get_activation())
-
-
     for batch_idx, (imgs, annotations) in enumerate(dataloader):
         start = time.time()
         # imgs: B x C x W x H
@@ -153,8 +141,6 @@ def train(model, dataloader, criterion, optimizer, anno_field, device):
         K, B = len(annotations), len(annotations[0])
         # B*K x N(max_len)
         targets = anno_transform(anno_field, annotations)
-        # TODO only use the first caption
-        K = 1 
         # B*K x C x W x H
         inputs = imgs.unsqueeze(1).repeat(1, K, 1, 1, 1).view(B*K, C, W, H)
         # move to cuda
@@ -174,22 +160,11 @@ def train(model, dataloader, criterion, optimizer, anno_field, device):
         loss = calculate_loss(outputs, targets, criterion, label_smoothing=True)
         # calculate and store partial derivatives
         loss.backward()
-        # perform gradient clipping
-        # nn.utils.clip_grad_norm_(model.parameters(), 0.1)
         # update all parameters based on partial derivatives
         optimizer.step()
-
-        # if batch_idx % 100 == 0:
-            # utils.plot_grad_flow(model.named_parameters())
-            # model.resnet.res_layers[3][1].conv1.weight.grad
-        # if batch_idx % 40 == 0:
-        #     utils.plot_grad_flow(model.named_parameters())
-        #     utils.print_batch_itos(None, anno_field.vocab, None, targets, preds)
-        #     pdb.set_trace()
-        
         # make sure to ZERO OUT all parameter gradients to prepare a clean slate for the next batch update
         optimizer.zero_grad()
-
+        # bookkeeping
         acc = calculate_acc(preds, targets)
         acc_meter.add(acc)
         loss_meter.add(loss.item())
@@ -198,7 +173,7 @@ def train(model, dataloader, criterion, optimizer, anno_field, device):
         if batch_idx % 100 == 0:
             epoch_time = len(dataloader) * time_meter.mean
             print('training: batch: %i loss: %f acc: %f epoch time: %fs' % (batch_idx, loss_meter.mean, acc_meter.mean, epoch_time))
-        if batch_idx > 0:
+        if batch_idx > 1000:
             break
     return loss_meter.mean, acc_meter.mean
 
@@ -215,10 +190,7 @@ def evaluate(model, dataloader, criterion, anno_field, device):
         B, C, W, H = imgs.size()
         K, B = len(annotations), len(annotations[0])
         targets = anno_transform(anno_field, annotations)
-        # TODO only use the first caption
-        K = 1 
         inputs = imgs.unsqueeze(0).repeat(K, 1, 1, 1, 1).view(B*K, C, W, H)
-        # move to cuda
         inputs = inputs.to(device)
         targets = targets.to(device)
         outputs = model(inputs, targets)
@@ -226,8 +198,8 @@ def evaluate(model, dataloader, criterion, anno_field, device):
         targets = targets[:, 1:]
         assert torch.equal(torch.tensor(preds.size()), torch.tensor(targets.size())), 'prediction and target size mismatch'
 
-        if batch_idx % 100 == 0:
-            utils.print_batch_itos(None, anno_field.vocab, None, targets, preds)
+        # if batch_idx % 100 == 0:
+        #     utils.print_batch_itos(None, anno_field.vocab, None, targets, preds)
 
         loss = calculate_loss(outputs, targets, criterion, label_smoothing=True)
         acc = calculate_acc(preds, targets)
@@ -242,8 +214,6 @@ def evaluate(model, dataloader, criterion, anno_field, device):
 
 # transform loaded annotation sentences to torch tensors
 def anno_transform(anno_field, annotations):
-    # TODO only use the first caption for the image. 
-    annotations = [annotations[0]]
     # annotations: [K(caps_per_img) x [B x caption]]
     K, B = len(annotations), len(annotations[0])
     # [K*B x caption] captions from same image are separated

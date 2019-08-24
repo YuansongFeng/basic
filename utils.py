@@ -48,14 +48,16 @@ def output_history_graph(train_acc_history, val_acc_history, train_loss_history,
     # output training and validation accuracies
     plt.figure(0)
     plt.plot(list(range(epochs)), train_acc_history, label='train')
-    plt.plot(list(range(epochs)), val_acc_history, label='val')
+    if val_acc_history is not None:
+        plt.plot(list(range(epochs)), val_acc_history, label='val')
     plt.legend(loc='upper left')
     plt.savefig('acc.png')
     plt.clf()
 
     plt.figure(1)
     plt.plot(list(range(epochs)), train_loss_history, label='train')
-    plt.plot(list(range(epochs)), val_loss_history, label='val')
+    if val_loss_history is not None:
+        plt.plot(list(range(epochs)), val_loss_history, label='val')
     plt.legend(loc='upper left')
     plt.savefig('loss.png')
     plt.clf()
