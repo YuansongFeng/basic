@@ -59,6 +59,5 @@ class CocoAnnotationDataset(data.Dataset):
 
 def test():
     field = get_annotation_field('/data/feng/coco/annotations/captions_val2014.json')
-    pdb.set_trace()
 
 # test()

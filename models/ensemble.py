@@ -4,7 +4,6 @@ import torch.nn as nn
 # from models import resnet, transformer
 import torchvision.models as models
 
-
 import pdb
 
 class Ensemble(nn.Module):
@@ -25,8 +24,10 @@ class Ensemble(nn.Module):
             dim_feedforward=dim_feedforward, dropout=dropout, custom_encoder=custom_encoder, custom_decoder=custom_decoder)
         # reuse the target embedding matrix as a form of regularization
         self.proj = nn.Linear(d_model, tgt_vocab_size, bias=False)
+        # Surprisingly, this makes the language model predict exactly itself without training 
         self.proj.weight = self.tgt_embedding.weight
         self.pad_label = pad_label
+
 
     def forward(self, inputs, outputs):
         # inputs(images): B x C_in x W x H
@@ -39,7 +40,6 @@ class Ensemble(nn.Module):
         B, C, W, H = activations.size()
         # B x W*H x C
         activations = activations.view(B, C, -1).permute(0, 2, 1)
-        # activations = torch.ones_like(activations).to(inputs.device)
         # B x W*H x d_m
         act_emb = self.act_proj(activations)
         # W*H(N_in) x B x d_m

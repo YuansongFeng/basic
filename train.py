@@ -14,8 +14,9 @@ import torchnet.meter as meter
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
-import spacy 
+from torch.utils.tensorboard import SummaryWriter
 import time
+import numpy as np
 
 from models.ensemble import Ensemble
 import dataset
@@ -35,8 +36,8 @@ def main():
     learning_rate = 1e-3
     # effective batch size is batch_size*K(caps_per_img)
     batch_size = 8
-    num_epochs = 300
-    device = torch.device('cuda:1')
+    num_epochs = 500
+    device = torch.device('cuda:0')
     # pretrained_checkpoint = 'checkpoints/best_acc.pth.tar'
 
     # load vocab to numericalize annotations
@@ -79,51 +80,54 @@ def main():
         pad_label=PAD_LABEL,
         d_model=512, 
         nhead=8, 
-        num_encoder_layers=2, 
-        num_decoder_layers=2, 
-        dim_feedforward=2048, 
+        # encoder layer for image feature stays 1
+        num_encoder_layers=1,
+        # decoder layer for texts performs best < 3
+        num_decoder_layers=2,
+        dim_feedforward=2048,
         dropout=0.1
     )
     # batch_size should be relatively big to take effective advantage of DataParallel
     # model = nn.DataParallel(model).to(device)
     model.to(device)
 
+    # initialize model 
+    def init_weight(m):
+        if isinstance(m, nn.Linear) and m.weight.requires_grad:
+            nn.init.xavier_normal_(m.weight.data)
+    model.apply(init_weight)
+
     if 'pretrained_checkpoint' in locals() and pretrained_checkpoint is not None:
         model.load_state_dict(torch.load(pretrained_checkpoint))
         print('loaded pre-trained model from %s' % pretrained_checkpoint)
 
-    criterion = nn.CrossEntropyLoss().to(device)
+    criterion = nn.CrossEntropyLoss(ignore_index=PAD_LABEL).to(device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.98))
-    scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, verbose=True, patience=15)
+    scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, verbose=True, patience=30)
+    # logging to tensorboard
+    writer = SummaryWriter()
 
     # training loop 
-    train_acc_hist = []
-    train_loss_hist = []
-    val_acc_hist = []
-    val_loss_hist = []
     best_acc = 0.0
     for epoch in range(num_epochs):
-        loss, acc = train(model, train_loader, criterion, optimizer, anno_field, device)
-        train_acc_hist.append(acc)
-        train_loss_hist.append(loss)
+        train_loss, train_acc = train(model, train_loader, criterion, optimizer, anno_field, device)
+        writer.add_scalar('Acc/train', train_acc, epoch)
+        writer.add_scalar('Loss/train', train_loss, epoch)
 
-        loss, acc = evaluate(model, val_loader, criterion, anno_field, device)
-        val_acc_hist.append(acc)
-        val_loss_hist.append(loss)
+        val_loss, val_acc = evaluate(model, val_loader, criterion, anno_field, device)
+        writer.add_scalar('Acc/val', val_acc, epoch)
+        writer.add_scalar('Loss/val', val_loss, epoch)
 
         # reduce learning rate on plateau of validation loss
-        scheduler.step(loss)
+        scheduler.step(train_loss)
 
-        if acc > best_acc:
+        if val_loss > best_acc:
             save_path = os.path.join(checkpoint_dir, 'best_acc.pth.tar')
             torch.save(model.state_dict(), save_path)
-            best_acc = acc
-            print('model with accuracy %f saved to path %s' % (acc, save_path))
+            best_acc = val_loss
+            print('model with accuracy %f saved to path %s' % (val_acc, save_path))
         
-        print('****** epoch: %i val loss: %f val acc: %f best_acc: %f ******' % (epoch, loss, acc, best_acc))
-
-        # upload loss and acc curves to visdom
-        utils.output_history_graph(train_acc_hist, val_acc_hist, train_loss_hist, val_loss_hist)
+        print('****** epoch: %i val loss: %f val acc: %f best_acc: %f ******' % (epoch, val_loss, val_acc, best_acc))
 
 
 def train(model, dataloader, criterion, optimizer, anno_field, device):
@@ -132,8 +136,10 @@ def train(model, dataloader, criterion, optimizer, anno_field, device):
     time_meter = meter.AverageValueMeter()
 
     model.train()
-
+    stop_batch_idx = 500
     for batch_idx, (imgs, annotations) in enumerate(dataloader):
+        if batch_idx == stop_batch_idx:
+            break
         start = time.time()
         # imgs: B x C x W x H
         # annotations: [K(caps_per_img) x [B x caption]]
@@ -141,6 +147,7 @@ def train(model, dataloader, criterion, optimizer, anno_field, device):
         K, B = len(annotations), len(annotations[0])
         # B*K x N(max_len)
         targets = anno_transform(anno_field, annotations)
+        # K=1
         # B*K x C x W x H
         inputs = imgs.unsqueeze(1).repeat(1, K, 1, 1, 1).view(B*K, C, W, H)
         # move to cuda
@@ -155,6 +162,8 @@ def train(model, dataloader, criterion, optimizer, anno_field, device):
         # use the first N-1 words(targets[:, :-1]) to predict last N-1 words(targets[:, 1:])
         # we use masking inside attention to prevent peak-ahead
         targets = targets[:, 1:]
+        # if batch_idx % 100 == 0:
+        #     utils.print_batch_itos(None, anno_field.vocab, None, targets, preds)
         # check that the size matches
         assert torch.equal(torch.tensor(preds.size()), torch.tensor(targets.size())), 'prediction and target size mismatch'
         loss = calculate_loss(outputs, targets, criterion, label_smoothing=True)
@@ -171,10 +180,8 @@ def train(model, dataloader, criterion, optimizer, anno_field, device):
         time_meter.add(time.time() - start)
 
         if batch_idx % 100 == 0:
-            epoch_time = len(dataloader) * time_meter.mean
-            print('training: batch: %i loss: %f acc: %f epoch time: %fs' % (batch_idx, loss_meter.mean, acc_meter.mean, epoch_time))
-        if batch_idx > 1000:
-            break
+            epoch_time = stop_batch_idx * time_meter.mean / 60.0
+            print('training: batch: %i loss: %f acc: %f epoch time: %f min' % (batch_idx, loss_meter.mean, acc_meter.mean, epoch_time))
     return loss_meter.mean, acc_meter.mean
 
     
@@ -183,13 +190,16 @@ def evaluate(model, dataloader, criterion, anno_field, device):
     loss_meter = meter.AverageValueMeter()
 
     model.eval()
-
+    stop_batch_idx = 100
     for batch_idx, (imgs, annotations) in enumerate(dataloader):
+        if batch_idx == stop_batch_idx:
+            break
         # imgs: B x C x W x H
         # annotations: [K(caps_per_img) x [B x caption]]
         B, C, W, H = imgs.size()
         K, B = len(annotations), len(annotations[0])
         targets = anno_transform(anno_field, annotations)
+        # K=1
         inputs = imgs.unsqueeze(0).repeat(K, 1, 1, 1, 1).view(B*K, C, W, H)
         inputs = inputs.to(device)
         targets = targets.to(device)
@@ -208,12 +218,11 @@ def evaluate(model, dataloader, criterion, anno_field, device):
 
         if batch_idx % 100 == 0:
             print('validation: batch: %i loss: %f acc: %f' % (batch_idx, loss_meter.mean, acc_meter.mean))
-        if batch_idx > 400:
-            break
     return loss_meter.mean, acc_meter.mean
 
 # transform loaded annotation sentences to torch tensors
 def anno_transform(anno_field, annotations):
+    # annotations = [annotations[0]]
     # annotations: [K(caps_per_img) x [B x caption]]
     K, B = len(annotations), len(annotations[0])
     # [K*B x caption] captions from same image are separated
@@ -250,7 +259,7 @@ def calculate_loss(outputs, targets, criterion, label_smoothing=False):
         # B*N
         loss = (- true_prob * log_pred_prob).sum(dim=1)
         non_pad_mask = targets.ne(PAD_LABEL)
-        loss = loss.masked_select(non_pad_mask).sum()
+        loss = loss.masked_select(non_pad_mask).mean()
     else:
         loss = criterion(outputs, targets)
     

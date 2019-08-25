@@ -7,3 +7,5 @@ checkpoints/
 *.pl
 *.txt
 .glove_cache/
+runs/
+tmp*.py
