@@ -196,6 +196,6 @@ def test_translate():
         predict_seqs = translate(inputs, model, bos_label, eos_label, pad_label, beam_size=beam_size, max_len=30)
         # B*K*beam_size x N_target
         targets = targets.unsqueeze(1).repeat(1, beam_size, 1).view(targets.size(0)*beam_size, -1)
-        utils.print_batch_itos(None, anno_vocab, None, targets, predict_seqs, K=5)
+        utils.print_batch_itos(None, anno_vocab, None, targets, predict_seqs, K=1)
 
 test_translate()
