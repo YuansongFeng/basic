@@ -19,7 +19,6 @@ import pdb
 
 def translate(inputs, model, bos_label, eos_label, pad_label, beam_size=3, max_len=50):
     # inputs: B x C x W x H
-    # B, N_in = inputs.size()
     B, C, W, H = inputs.size()
 
     # beam search variables
@@ -28,7 +27,6 @@ def translate(inputs, model, bos_label, eos_label, pad_label, beam_size=3, max_l
      # [B*beam_size x 0.0]
     candidate_log_probs = [0.0] * (B*beam_size)
     # B*beam_size x C x W x H
-    # inputs = inputs.repeat(1, beam_size).view(B*beam_size, N_in)
     inputs = inputs.unsqueeze(1).repeat(1, beam_size, 1, 1, 1).view(B*beam_size, C, W, H)
     # generate more words until max_len is hit
     while len(candidate_seqs[0]) < max_len:
@@ -130,7 +128,7 @@ def anno_transform(anno_field, annotations):
     annotations = annotations.view(K, B, -1).transpose(0, 1).contiguous().view(B*K, -1)
     return annotations
 
-def test():
+def test_translate():
     pretrained_checkpoint = 'checkpoints/3_layer_best.pth.tar'
     image_val_dir = '/data/feng/coco/images/val2014'
     anno_val_dir = '/data/feng/coco/annotations/captions_val2014.json'
@@ -178,8 +176,6 @@ def test():
         dim_feedforward=2048,
         dropout=0.1
     )
-    # batch_size should be relatively big to take effective advantage of DataParallel
-    # model = nn.DataParallel(model).to(torch.device('cuda'))
     model.to(device)
     model.load_state_dict(torch.load(pretrained_checkpoint))
 
@@ -200,9 +196,6 @@ def test():
         predict_seqs = translate(inputs, model, bos_label, eos_label, pad_label, beam_size=beam_size, max_len=30)
         # B*K*beam_size x N_target
         targets = targets.unsqueeze(1).repeat(1, beam_size, 1).view(targets.size(0)*beam_size, -1)
-        # utils.print_batch_itos(None, anno_vocab, None, targets, predict_seqs, K=5)
-    writer = SummaryWriter()
-    writer.add_embedding(model.act_proj.weight.permute(1, 0))
+        utils.print_batch_itos(None, anno_vocab, None, targets, predict_seqs, K=5)
 
-
-test()
+test_translate()

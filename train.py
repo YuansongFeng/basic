@@ -21,9 +21,9 @@ import time
 from models.ensemble import Ensemble
 import dataset
 import utils
-import pdb
-
 import custom_optim
+
+import pdb
 
 PAD_LABEL = None
 
@@ -40,7 +40,7 @@ def main():
     batch_size = 20
     num_epochs = 500
     device = torch.device('cuda:0')
-    # pretrained_checkpoint = 'checkpoints/best_acc.pth.tar'
+    pretrained_checkpoint = 'checkpoints/3_layer_best.pth.tar'
 
     # load vocab to numericalize annotations
     anno_field = dataset.load_annotation_field('anno_field.pl')
@@ -87,8 +87,7 @@ def main():
         dim_feedforward=2048,
         dropout=0.1
     )
-    # batch_size should be relatively big to take effective advantage of DataParallel
-    # model = nn.DataParallel(model).to(device)
+    # batch_size should be relatively big to take effective advantage of nn.DataParallel
     model.to(device)
 
     # initialize model 
@@ -122,7 +121,7 @@ def main():
 
         if val_acc > best_acc:
             save_path = os.path.join(checkpoint_dir, 'best_acc.pth.tar')
-            torch.save(model.state_dict(), save_path)
+            # torch.save(model.state_dict(), save_path)
             best_acc = val_acc
             print('model with accuracy %f saved to path %s' % (val_acc, save_path))
         
@@ -146,7 +145,6 @@ def train(model, dataloader, criterion, optimizer, anno_field, device):
         K, B = len(annotations), len(annotations[0])
         # B*K x N(max_len)
         targets = anno_transform(anno_field, annotations)
-        # K=1
         # B*K x C x W x H
         inputs = imgs.unsqueeze(1).repeat(1, K, 1, 1, 1).view(B*K, C, W, H)
         # move to cuda
@@ -161,8 +159,6 @@ def train(model, dataloader, criterion, optimizer, anno_field, device):
         # use the first N-1 words(targets[:, :-1]) to predict last N-1 words(targets[:, 1:])
         # we use masking inside attention to prevent peak-ahead
         targets = targets[:, 1:]
-        # if batch_idx % 100 == 0:
-        #     utils.print_batch_itos(None, anno_field.vocab, None, targets, preds)
         # check that the size matches
         assert torch.equal(torch.tensor(preds.size()), torch.tensor(targets.size())), 'prediction and target size mismatch'
         loss = calculate_loss(outputs, targets, criterion, label_smoothing=True)
@@ -198,7 +194,6 @@ def evaluate(model, dataloader, criterion, anno_field, device):
         B, C, W, H = imgs.size()
         K, B = len(annotations), len(annotations[0])
         targets = anno_transform(anno_field, annotations)
-        # K=1
         inputs = imgs.unsqueeze(0).repeat(K, 1, 1, 1, 1).view(B*K, C, W, H)
         inputs = inputs.to(device)
         targets = targets.to(device)
@@ -206,9 +201,6 @@ def evaluate(model, dataloader, criterion, anno_field, device):
         preds = outputs.argmax(2)
         targets = targets[:, 1:]
         assert torch.equal(torch.tensor(preds.size()), torch.tensor(targets.size())), 'prediction and target size mismatch'
-
-        # if batch_idx % 100 == 0:
-        #     utils.print_batch_itos(None, anno_field.vocab, None, targets, preds)
 
         loss = calculate_loss(outputs, targets, criterion, label_smoothing=True)
         acc = calculate_acc(preds, targets)
@@ -221,7 +213,6 @@ def evaluate(model, dataloader, criterion, anno_field, device):
 
 # transform loaded annotation sentences to torch tensors
 def anno_transform(anno_field, annotations):
-    # annotations = [annotations[0]]
     # annotations: [K(caps_per_img) x [B x caption]]
     K, B = len(annotations), len(annotations[0])
     # [K*B x caption] captions from same image are separated
