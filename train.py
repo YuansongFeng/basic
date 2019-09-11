@@ -23,7 +23,7 @@ import dataset
 import utils
 import pdb
 
-import transformer.Optim as custom_optim
+import custom_optim
 
 PAD_LABEL = None
 
