@@ -15,13 +15,15 @@ import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-import time
 import numpy as np
+import time
 
 from models.ensemble import Ensemble
 import dataset
 import utils
 import pdb
+
+import transformer.Optim as custom_optim
 
 PAD_LABEL = None
 
@@ -35,7 +37,7 @@ def main():
     checkpoint_dir = 'checkpoints'
     learning_rate = 1e-3
     # effective batch size is batch_size*K(caps_per_img)
-    batch_size = 8
+    batch_size = 20
     num_epochs = 500
     device = torch.device('cuda:0')
     # pretrained_checkpoint = 'checkpoints/best_acc.pth.tar'
@@ -80,10 +82,8 @@ def main():
         pad_label=PAD_LABEL,
         d_model=512, 
         nhead=8, 
-        # encoder layer for image feature stays 1
-        num_encoder_layers=1,
-        # decoder layer for texts performs best < 3
-        num_decoder_layers=2,
+        num_encoder_layers=3,
+        num_decoder_layers=3,
         dim_feedforward=2048,
         dropout=0.1
     )
@@ -103,14 +103,16 @@ def main():
 
     criterion = nn.CrossEntropyLoss(ignore_index=PAD_LABEL).to(device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.98))
-    scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, verbose=True, patience=30)
+    # warmup steps linearly increases the learning rate up to d_m^-0.5 x warmup^-0.5(0.0007)
+    # this prevents early overfitting
+    scheduled_optimizer = custom_optim.ScheduledOptim(optimizer=optimizer, d_model=512, n_warmup_steps=4000)
     # logging to tensorboard
     writer = SummaryWriter()
 
     # training loop 
     best_acc = 0.0
     for epoch in range(num_epochs):
-        train_loss, train_acc = train(model, train_loader, criterion, optimizer, anno_field, device)
+        train_loss, train_acc = train(model, train_loader, criterion, scheduled_optimizer, anno_field, device)
         writer.add_scalar('Acc/train', train_acc, epoch)
         writer.add_scalar('Loss/train', train_loss, epoch)
 
@@ -118,13 +120,10 @@ def main():
         writer.add_scalar('Acc/val', val_acc, epoch)
         writer.add_scalar('Loss/val', val_loss, epoch)
 
-        # reduce learning rate on plateau of validation loss
-        scheduler.step(train_loss)
-
-        if val_loss > best_acc:
+        if val_acc > best_acc:
             save_path = os.path.join(checkpoint_dir, 'best_acc.pth.tar')
             torch.save(model.state_dict(), save_path)
-            best_acc = val_loss
+            best_acc = val_acc
             print('model with accuracy %f saved to path %s' % (val_acc, save_path))
         
         print('****** epoch: %i val loss: %f val acc: %f best_acc: %f ******' % (epoch, val_loss, val_acc, best_acc))
@@ -136,7 +135,7 @@ def train(model, dataloader, criterion, optimizer, anno_field, device):
     time_meter = meter.AverageValueMeter()
 
     model.train()
-    stop_batch_idx = 500
+    stop_batch_idx = 100
     for batch_idx, (imgs, annotations) in enumerate(dataloader):
         if batch_idx == stop_batch_idx:
             break
@@ -170,7 +169,7 @@ def train(model, dataloader, criterion, optimizer, anno_field, device):
         # calculate and store partial derivatives
         loss.backward()
         # update all parameters based on partial derivatives
-        optimizer.step()
+        optimizer.step_and_update_lr()
         # make sure to ZERO OUT all parameter gradients to prepare a clean slate for the next batch update
         optimizer.zero_grad()
         # bookkeeping
@@ -190,7 +189,7 @@ def evaluate(model, dataloader, criterion, anno_field, device):
     loss_meter = meter.AverageValueMeter()
 
     model.eval()
-    stop_batch_idx = 100
+    stop_batch_idx = 50
     for batch_idx, (imgs, annotations) in enumerate(dataloader):
         if batch_idx == stop_batch_idx:
             break

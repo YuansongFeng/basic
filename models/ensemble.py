@@ -36,10 +36,10 @@ class Ensemble(nn.Module):
         outputs = outputs[:, :-1]
         # B x C_act x W x H(7)
         activations = self.resnet(inputs)
-        # pdb.set_trace()
         B, C, W, H = activations.size()
         # B x W*H x C
         activations = activations.view(B, C, -1).permute(0, 2, 1)
+
         # B x W*H x d_m
         act_emb = self.act_proj(activations)
         # W*H(N_in) x B x d_m

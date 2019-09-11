@@ -9,6 +9,7 @@ import numpy as np
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 from models.transformer import Transformer
 from models.ensemble import Ensemble
@@ -38,7 +39,7 @@ def translate(inputs, model, bos_label, eos_label, pad_label, beam_size=3, max_l
         # for each sentence, first word from candidate_outputs is removed and the next predicted word probabilities are attached to the end
         next_outputs = model(inputs, candidate_outputs)
         # B*beam_size x vocab_size
-        next_word_probs = F.softmax(next_outputs[:, -1, :].squeeze(), dim=1)
+        next_word_probs = F.softmax(next_outputs[:, -1, :].squeeze(dim=1), dim=1)
         log_next_word_probs = next_word_probs.log()
         
         # perform beam search based on log_next_word_probs
@@ -130,7 +131,7 @@ def anno_transform(anno_field, annotations):
     return annotations
 
 def test():
-    pretrained_checkpoint = 'checkpoints/best_acc.pth.tar'
+    pretrained_checkpoint = 'checkpoints/3_layer_best.pth.tar'
     image_val_dir = '/data/feng/coco/images/val2014'
     anno_val_dir = '/data/feng/coco/annotations/captions_val2014.json'
     batch_size = 2
@@ -168,10 +169,14 @@ def test():
 
     # load model 
     model = Ensemble(
-        filter_vocab_size=512, 
         tgt_vocab_size=len(anno_vocab),
-        tgt_vocab_vectors=anno_vocab.vectors,
-        pad_label=pad_label
+        pad_label=pad_label,
+        d_model=512, 
+        nhead=8, 
+        num_encoder_layers=3,
+        num_decoder_layers=3,
+        dim_feedforward=2048,
+        dropout=0.1
     )
     # batch_size should be relatively big to take effective advantage of DataParallel
     # model = nn.DataParallel(model).to(torch.device('cuda'))
@@ -195,6 +200,9 @@ def test():
         predict_seqs = translate(inputs, model, bos_label, eos_label, pad_label, beam_size=beam_size, max_len=30)
         # B*K*beam_size x N_target
         targets = targets.unsqueeze(1).repeat(1, beam_size, 1).view(targets.size(0)*beam_size, -1)
-        utils.print_batch_itos(None, anno_vocab, None, targets, predict_seqs, K=5)
+        # utils.print_batch_itos(None, anno_vocab, None, targets, predict_seqs, K=5)
+    writer = SummaryWriter()
+    writer.add_embedding(model.act_proj.weight.permute(1, 0))
+
 
 test()
